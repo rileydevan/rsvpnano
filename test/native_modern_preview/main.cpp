@@ -444,11 +444,11 @@ namespace {
             frame(true, 608, 120);
             frame(false, 608, 120);
             assert(reader.pageHighlightedWord() == 0);
-            tap(638, 147);
+            tap(638, 153);
             const auto afterOverlap = (overlap + 1)->start;
             assert(reader.session.state.wordIndex == afterOverlap && reader.pageHighlightedWord() == afterOverlap);
             save("page-arrow-down");
-            tap(638, 45);
+            tap(638, 97);
             assert(reader.session.state.wordIndex == overlap->start && reader.pageHighlightedWord() == overlap->start);
             save("page-arrow-up");
             ReadingLoop::seekTo(reader.session, 0);

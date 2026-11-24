@@ -12,14 +12,14 @@ enum PageControl : size_t { menu, findPlace, dictionary, backToBook, previousLin
 struct PageButton { ui::Rect rect; std::string_view label; };
 constexpr PageButton pageButtons[]{
     {{8, 0, 144, 44}, "‹ Menu"}, {{168, 0, 144, 44}, "Find place"}, {{328, 0, 144, 44}, {}},
-    {{488, 0, 144, 44}, "Back to book ↗"}, {{588, 44, 44, 44}, "↑"}, {{588, 98, 44, 48}, "↓"}
+    {{488, 0, 144, 44}, "Back to book ↗"}, {{588, 44, 44, 20}, "↑"}, {{588, 92, 44, 48}, "↓"}
 };
 static_assert(std::size(pageButtons) == pageText);
 constexpr ui::Rect pageButtonTarget(size_t button) {
     if (button == previousLine)
-        return {580, 44, 60, 52};
+        return {580, 44, 60, 54};
     if (button == nextLine)
-        return {580, 96, 60, 52};
+        return {580, 98, 60, 56};
     return pageButtons[button].rect;
 }
 std::string folded(std::string text) {

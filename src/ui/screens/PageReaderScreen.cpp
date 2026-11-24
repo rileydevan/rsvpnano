@@ -219,7 +219,7 @@ namespace screens::PageReader {
 
         void layout(State& state, ui::fonts::AlphaTextRenderer<640>& text, const Typeface& typeface,
                     const settings::TypographySettings& typography, const ReadingSession& session, ui::Rect area,
-                    size_t start, bool measureInk = true) {
+                    size_t start, bool measureInk = true, bool spaceParagraphs = true) {
             const size_t wordCount = ReadingLoop::wordCount(session);
             size_t index = std::min(start, wordCount);
             clearPage(state);
@@ -257,7 +257,7 @@ namespace screens::PageReader {
                     }
                 }
                 const bool startsParagraph = index == paragraphRange.first;
-                if (state.lineCount > 0 && startsParagraph)
+                if (spaceParagraphs && state.lineCount > 0 && startsParagraph)
                     top = static_cast<int16_t>(top + std::max<int16_t>(4, previousLineHeight / 3));
 
                 State::Line& line = state.lines[state.lineCount];
@@ -1157,7 +1157,7 @@ namespace screens::PageReader {
             browse.rowCache.valid = false;
             const int16_t height = findingLine ? 640 : std::min(640, logicalArea.h + kBrowseLookahead);
             layout(state, text, typeface, typography, session,
-                   {logicalArea.x, logicalArea.y, logicalArea.w, height}, browse.first, !findingLine);
+                   {logicalArea.x, logicalArea.y, logicalArea.w, height}, browse.first, !findingLine, /*spaceParagraphs=*/false);
             state.layoutRevision = revision;
             state.layoutArea = logicalArea;
         };

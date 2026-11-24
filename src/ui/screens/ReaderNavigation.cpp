@@ -12,9 +12,16 @@ enum PageControl : size_t { menu, findPlace, dictionary, backToBook, previousLin
 struct PageButton { ui::Rect rect; std::string_view label; };
 constexpr PageButton pageButtons[]{
     {{8, 0, 144, 44}, "‹ Menu"}, {{168, 0, 144, 44}, "Find place"}, {{328, 0, 144, 44}, {}},
-    {{488, 0, 144, 44}, "Back to book ↗"}, {{588, 46, 44, 48}, "↑"}, {{588, 98, 44, 48}, "↓"}
+    {{488, 0, 144, 44}, "Back to book ↗"}, {{588, 44, 44, 44}, "↑"}, {{588, 98, 44, 48}, "↓"}
 };
 static_assert(std::size(pageButtons) == pageText);
+constexpr ui::Rect pageButtonTarget(size_t button) {
+    if (button == previousLine)
+        return {580, 44, 60, 52};
+    if (button == nextLine)
+        return {580, 96, 60, 52};
+    return pageButtons[button].rect;
+}
 std::string folded(std::string text) {
     for(auto& c:text) if(c>='A' && c<='Z') c+=('a'-'A');
     return text;
@@ -164,7 +171,7 @@ void ReaderScreen::beginPageTouch(int x, int y, bool readingSwipe) {
     if (readingSwipe)
         return;
     for (size_t i = pageBarVisible() ? menu : previousLine; i < std::size(pageButtons); ++i) {
-        if (ui::contains(pageButtons[i].rect, x, y)) {
+        if (ui::contains(pageButtonTarget(i), x, y)) {
             pageTouchControl_ = i;
             break;
         }
@@ -199,12 +206,16 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
 
     const int dx = int(touch->x) - pageTouchX_;
     const int dy = int(touch->y) - pageTouchY_;
-    if (pageTouchControl_ == pageText && ui::hasTouch(*touch, ui::TouchMove)) {
+    const bool startsOnArrow = pageTouchControl_ == previousLine || pageTouchControl_ == nextLine;
+    if ((pageTouchControl_ == pageText || startsOnArrow) && ui::hasTouch(*touch, ui::TouchMove)) {
         constexpr int verticalSlop = 6;
         constexpr int horizontalSlop = 8;
         constexpr int scrubStep = 16;
         constexpr int jitter = 2;
         if (pageGesture_ == PageGesture::pending) {
+            // Motion cancels an arrow tap, even if the finger returns to it.
+            if (startsOnArrow && std::max(std::abs(dx), std::abs(dy)) >= verticalSlop)
+                pageTouchControl_ = pageText;
             if (std::abs(dx) >= horizontalSlop && 2 * std::abs(dx) > 3 * std::abs(dy)) {
                 pageGesture_ = PageGesture::horizontal;
                 pageScrubX_ = pageTouchX_ - (dx > 0 ? 6 : -6);
@@ -285,7 +296,7 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         return true;
     }
     if (!ui::hasTouch(*touch, ui::TouchTap)
-        || (control < pageText && !ui::contains(pageButtons[control].rect, touch->x, touch->y)))
+        || (control < pageText && !ui::contains(pageButtonTarget(control), touch->x, touch->y)))
         return true;
     switch (control) {
     case menu:

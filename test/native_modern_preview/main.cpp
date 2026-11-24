@@ -394,6 +394,17 @@ namespace {
             ui.invalidate();
             frame(false,0,0);
             assert(probe.layout.lineCount >= 3);
+            // The sample contains both wrapped lines and paragraph starts.
+            // They advance by the same distance with a single font.
+            const int linePitch = probe.layout.lines[1].flowTop - probe.layout.lines[0].flowTop;
+            bool sawParagraph = false, sawWrap = false;
+            for (size_t row = 1; row < probe.layout.lineCount; ++row) {
+                const auto& line = probe.layout.lines[row];
+                assert(line.flowTop - probe.layout.lines[row - 1].flowTop == linePitch);
+                sawParagraph |= line.paragraphStart;
+                sawWrap |= !line.paragraphStart;
+            }
+            assert(sawParagraph && sawWrap);
             const size_t last = screens::PageReader::edgeWord(probe, true);
             const auto overlap = std::find_if(probe.layout.lines.begin(), probe.layout.lines.begin() + probe.layout.lineCount,
                 [last](const auto& line) { return last >= line.start && last < line.end; });
@@ -401,11 +412,43 @@ namespace {
             tap(608, 70);
             assert(reader.session.state.wordIndex == 0);
             assert(overlap + 1 < probe.layout.lines.begin() + probe.layout.lineCount);
-            tap(608, 120);
+            // The arrow gutter must handle movement exactly like the text,
+            // including a single move followed by an immediate release.
+            const auto resetPage = [&] {
+                ReadingLoop::seekTo(reader.session, 0);
+                reader.openPage();
+                ui.invalidate();
+                frame(false, 0, 0);
+            };
+            const auto verticalDrag = [&](int x) {
+                frame(true, x, 120);
+                frame(true, x, 111);
+                frame(false, x, 111);
+            };
+            verticalDrag(300);
+            const auto draggedWord = reader.pageHighlightedWord();
+            const std::vector<uint16_t> dragged(panel.getFramebuffer(), panel.getFramebuffer() + 640 * 172);
+            resetPage();
+            verticalDrag(608);
+            assert(reader.pageHighlightedWord() == draggedWord);
+            assert(std::equal(dragged.begin(), dragged.end(), panel.getFramebuffer()));
+
+            resetPage();
+            frame(true, 582, 120);
+            frame(true, 607, 120);
+            frame(false, 607, 120);
+            assert(reader.pageHighlightedWord() == 1);
+            resetPage();
+            frame(true, 608, 120);
+            frame(true, 615, 114);
+            frame(true, 608, 120);
+            frame(false, 608, 120);
+            assert(reader.pageHighlightedWord() == 0);
+            tap(638, 147);
             const auto afterOverlap = (overlap + 1)->start;
             assert(reader.session.state.wordIndex == afterOverlap && reader.pageHighlightedWord() == afterOverlap);
             save("page-arrow-down");
-            tap(608, 70);
+            tap(638, 45);
             assert(reader.session.state.wordIndex == overlap->start && reader.pageHighlightedWord() == overlap->start);
             save("page-arrow-up");
             ReadingLoop::seekTo(reader.session, 0);
@@ -487,7 +530,7 @@ namespace {
             renderFollow(0);
             const auto lines = std::span(probe.layout.lines).first(probe.layout.lineCount);
             const auto crossing = std::ranges::find_if(lines, [&](const auto& line) {
-                return line.flowTop > body.y + body.h * 2 / 5;
+                return line.flowTop - lines.front().flowTop > body.h * 2 / 5;
             });
             assert(crossing != lines.end() && crossing > lines.begin() + 1);
             assert(crossing->bottom < body.y + body.h && crossing->start + 1 < crossing->end);

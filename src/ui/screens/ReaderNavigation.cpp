@@ -24,6 +24,7 @@ void ReaderScreen::openPage(bool hideControls) {
     ReadingLoop::pause(session);
     pageBrowsing_=true;pageSelected_=session.state.wordIndex;
     browse_ = {};
+    pageViewportBeforeControls_.reset();
     browse_.first = pageSelected_;
     pageTouchControl_ = none;
     pageBarHidden_ = hideControls;
@@ -43,8 +44,35 @@ ui::Rect ReaderScreen::pageBody() const {
 bool ReaderScreen::revealPageControls() {
     if (!pageBrowsing_ || pageBarVisible())
         return false;
+    if (browse_.layout.pageStart != SIZE_MAX) {
+        // Showing the controls can shift the text to keep the selection visible.
+        pageViewportBeforeControls_ = PageViewport{
+            browse_.first, browse_.topLine, pageSelected_, browse_.offset,
+            browse_.scrollRemainder, browse_.displayArea, browse_.previousLines
+        };
+    }
     pageBarHidden_ = false;
     return true;
+}
+void ReaderScreen::hidePageControls() {
+    if (!pageBrowsing_ || !pageBarVisible())
+        return;
+
+    pageBarHidden_ = true;
+    if (pageViewportBeforeControls_) {
+        auto& saved = *pageViewportBeforeControls_;
+        browse_.first = saved.first;
+        browse_.topLine = saved.topLine;
+        browse_.offset = saved.offset;
+        browse_.scrollRemainder = saved.scrollRemainder;
+        browse_.displayArea = saved.area;
+        browse_.previousLines = std::move(saved.previousLines);
+        pageSelected_ = saved.selected;
+        pageViewportBeforeControls_.reset();
+    } else {
+        // Keep the current selection while expanding the reading area.
+        pageVerticalHighlight_ = false;
+    }
 }
 void ReaderScreen::openLocator(Screen& screen) {
     ReadingLoop::pause(session);
@@ -116,10 +144,13 @@ void ReaderScreen::beginPageTouch(int x, int y, bool readingSwipe) {
     pageScrollY_ = pageTouchY_ = pageLastTouchY_ = y;
     pageTouchDelta_ = 0;
     pagePendingTouchY_.reset();
-    pageScrollDirection_ = 0;
     pageVerticalMoved_ = false;
     pageScrubMoved_ = false;
     pageTouchControl_ = (readingSwipe || ui::contains(pageBody(), x, y)) ? pageText : none;
+    if (pageTouchControl_ == pageText) {
+        pageScrollDirection_ = 0;
+        pageViewportBeforeControls_.reset();
+    }
     if (readingSwipe)
         return;
     for (size_t i = pageBarVisible() ? menu : previousLine; i < std::size(pageButtons); ++i) {
@@ -238,10 +269,13 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         || (control < pageText && !ui::contains(pageButtons[control].rect, touch->x, touch->y)))
         return true;
     switch (control) {
-    case menu: screen = Screen::Read; break;
+    case menu:
+        hidePageControls();
+        screen = Screen::Read;
+        break;
     case dictionary:
         if (browse_.highlighted != SIZE_MAX) {
-            pageBarHidden_ = true;
+            hidePageControls();
             screen = Screen::Dictionary;
         }
         break;
@@ -254,6 +288,7 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         break;
     case previousLine:
     case nextLine: {
+        pageViewportBeforeControls_.reset();
         const bool down = control == nextLine;
         browse_.step = down ? PageReader::ScrollStep::nextPage : PageReader::ScrollStep::previousPage;
         browse_.stepWord = PageReader::edgeWord(browse_, down);

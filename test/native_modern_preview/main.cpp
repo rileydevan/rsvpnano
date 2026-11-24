@@ -366,7 +366,11 @@ namespace {
             }
             else if (screen == screens::Screen::Dictionary)
                 dictionary.draw(ui, reader.session, screen, now);
-            else reader.drawLocator(ui,screen,preferences,now);
+            else if (screen == screens::Screen::Read) {
+                if (screens::modern::menu(ui, "Sample", "", 0, true, settings.settings().interface, screen)
+                    == screens::Action::Resume)
+                    screen = screens::Screen::Reader;
+            } else reader.drawLocator(ui,screen,preferences,now);
             ui.endFrame();
         };
         const auto tap=[&](int x,int y){frame(true,x,y);frame(false,x,y);frame(false,x,y);};
@@ -690,6 +694,52 @@ namespace {
         tap(40,20);assert(screen==screens::Screen::Reader&&reader.session.state.wordIndex==0);
         screen=screens::Screen::FindChapters;frame(false,0,0);save("find-chapters");
         screen=screens::Screen::Reader;reader.openPage();theme=ui::modern::paperTheme();ui.setTheme(theme);frame(false,0,0);save("page-paper");
+        // A partial-row viewport and a low selected word make revealing the
+        // controls move the layout. Closing it must restore the reading viewport.
+        for (uint8_t size = 0; size < 5; ++size) {
+            reading.setPageTextSize(size);
+            reader.openPage(true);
+            frame(false, 0, 0);
+            frame(true, 200, 145);
+            for (int y = 144; y >= 125; --y)
+                frame(true, 200, y);
+            frame(false, 200, 125);
+            tap(130, 150);
+            const auto selection = reader.pageHighlightedWord();
+            const auto progress = reader.session.state.wordIndex;
+            const std::vector<uint16_t> before(panel.getFramebuffer(), panel.getFramebuffer() + 640 * 172);
+            const auto verifyReturn = [&] {
+                assert(screen == screens::Screen::Reader && reader.pageBrowsing());
+                assert(reader.pageHighlightedWord() == selection && reader.session.state.wordIndex == progress);
+                const auto verifyViewport = [&] {
+                    const auto* pixels = panel.getFramebuffer();
+                    for (int y = 0; y < 172; ++y) {
+                        // Include the entire toolbar area and the text below it.
+                        const auto row = before.begin() + y * 640;
+                        assert(std::equal(row, row + (y < 44 ? 640 : 580), pixels + y * 640));
+                    }
+                };
+                verifyViewport();
+                frame(false, 0, 0);
+                verifyViewport();
+            };
+            assert(reader.revealPageControls());
+            ui.invalidate();
+            frame(false, 0, 0);
+            const auto lookupWord = reader.pageHighlightedWord();
+            tap(400, 20);
+            assert(screen == screens::Screen::Dictionary && dictionary::previewLookupWord == lookupWord);
+            tap(42, 22);
+            verifyReturn();
+
+            assert(reader.revealPageControls());
+            ui.invalidate();
+            frame(false, 0, 0);
+            tap(60, 20);
+            assert(screen == screens::Screen::Read);
+            tap(80, 142);
+            verifyReturn();
+        }
         assert(committed>0);std::puts("Page, locator and search: simple header, mode preserved, chrome fully restored, direct drag, explicit jump, previous place, keyboard, results preview and cancel verified.");
     }
 

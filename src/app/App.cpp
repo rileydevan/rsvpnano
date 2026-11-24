@@ -738,6 +738,7 @@ void App::handleInput(Input::ActionMask actions, uint32_t nowMs) {
         if (screen_ == screens::Screen::Reader) {
             ReadingProgress::save(readerScreen_.session, prefs_, true, nowMs);
             ReadingLoop::pause(readerScreen_.session);
+            readerScreen_.hidePageControls();
             screen_ = immediateUi_.modernReadingPalette() ? screens::Screen::QuickControls : screens::Screen::Read;
         } else {
             if (companionApi_.active()) {
@@ -831,6 +832,7 @@ void App::handleInput(Input::ActionMask actions, uint32_t nowMs) {
         } else {
             ReadingProgress::save(readerScreen_.session, prefs_, true, nowMs);
             ReadingLoop::pause(readerScreen_.session);
+            readerScreen_.hidePageControls();
             screen_ = screens::Screen::Read;
             renderScreen(nowMs);
         }

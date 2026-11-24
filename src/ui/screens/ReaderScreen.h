@@ -59,6 +59,7 @@ namespace screens {
         void drawPage(ui::Context& ui, uint32_t nowMs);
         size_t pageHighlightedWord() const { return browse_.highlighted; }
         bool revealPageControls();
+        void hidePageControls();
         void openLocator(Screen& screen);
         void drawLocator(ui::Context& ui, Screen& screen, Preferences& preferences, uint32_t nowMs);
         bool pageBrowsing() const { return pageBrowsing_; }
@@ -81,6 +82,13 @@ namespace screens {
         ui::Rect pageBody() const;
         bool pageBarVisible() const { return !pageBarHidden_; }
         PageReader::BrowseState browse_;
+        struct PageViewport {
+            size_t first, topLine, selected;
+            int offset, scrollRemainder;
+            ui::Rect area;
+            std::vector<std::pair<size_t, int16_t>> previousLines;
+        };
+        std::optional<PageViewport> pageViewportBeforeControls_;
         size_t pageSelected_ = 0;
         bool pageSelectionPinned_ = false;
         size_t returnWord_ = SIZE_MAX;

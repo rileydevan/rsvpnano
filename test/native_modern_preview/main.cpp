@@ -593,13 +593,15 @@ namespace {
         const std::vector<uint16_t> beforeScrub(panel.getFramebuffer(), panel.getFramebuffer() + 640 * 172);
         frame(true, 200, 112);
         frame(true, 211, 113);
-        assert(reader.pageHighlightedWord() == lookup + 1);
+        assert(reader.pageHighlightedWord() == lookup);
         const auto* afterShortDrag = panel.getFramebuffer();
-        assert(std::equal(beforeScrub.begin(), beforeScrub.begin() + 640 * 44, afterShortDrag));
-        assert(std::equal(beforeScrub.begin() + 640 * 98, beforeScrub.end(), afterShortDrag + 640 * 98));
+        assert(!std::equal(beforeScrub.begin(), beforeScrub.begin() + 640 * 44, afterShortDrag));
+        assert(std::equal(beforeScrub.begin() + 640 * 44, beforeScrub.end(), afterShortDrag + 640 * 44));
+        frame(true, 228, 113);
+        assert(reader.pageHighlightedWord() == lookup + 1);
         frame(true, 365, 116);
         const auto toRight = reader.pageHighlightedWord();
-        assert(toRight == lookup + 10 && reader.session.state.wordIndex == 0);
+        assert(toRight == lookup + 9 && reader.session.state.wordIndex == 0);
         save("page-word-scrub");
         frame(true, 265, 116);
         assert(reader.pageHighlightedWord() == toRight - 5);
@@ -739,6 +741,61 @@ namespace {
             assert(screen == screens::Screen::Read);
             tap(80, 142);
             verifyReturn();
+        }
+        // With auto-hide on, locking either drag axis removes only the
+        // toolbar. Holding still or lifting immediately keeps the same text.
+        reading.pageControlsAutoHide = true;
+        for (uint8_t size = 0; size < 5; ++size) {
+            reading.setPageTextSize(size);
+            for (bool horizontal : {false, true}) {
+                ReadingLoop::seekTo(reader.session, 0);
+                reader.openPage();
+                ui.invalidate();
+                frame(false, 0, 0);
+                const auto word = reader.pageHighlightedWord();
+                const std::vector<uint16_t> before(panel.getFramebuffer(), panel.getFramebuffer() + 640 * 172);
+                const int x = horizontal ? 210 : 200;
+                const int y = horizontal ? 142 : 134;
+                frame(true, 200, 142);
+                frame(true, x, y);
+                const auto verifyDismissed = [&] {
+                    const auto* pixels = panel.getFramebuffer();
+                    assert(std::all_of(pixels, pixels + 640 * 44, [&](uint16_t pixel) { return pixel == pixels[0]; }));
+                    assert(std::equal(before.begin() + 640 * 44, before.end(), pixels + 640 * 44));
+                    assert(reader.pageHighlightedWord() == word && reader.session.state.wordIndex == 0);
+                };
+                verifyDismissed();
+                frame(true, x, y);
+                verifyDismissed();
+                frame(false, x, y);
+                verifyDismissed();
+                frame(false, 0, 0);
+                verifyDismissed();
+
+                // A real vertical move continues from that position even at
+                // the book start, where no previous text can fill the header.
+                if (!horizontal) {
+                    frame(true, 200, 142);
+                    frame(true, 200, 133);
+                    const auto* pixels = panel.getFramebuffer();
+                    const auto differences = [&](int shift) {
+                        size_t changed = 0;
+                        for (int y = 44; y < 164; ++y) {
+                            for (int x = 0; x < 580; ++x)
+                                changed += before[(y + shift) * 640 + x] != pixels[y * 640 + x];
+                        }
+                        return changed;
+                    };
+                    // The 9-pixel gesture clears 6 pixels of motion slop.
+                    // A change in highlight may recolor one word.
+                    const auto expected = differences(3);
+                    for (int shift = 0; shift <= 8; ++shift) {
+                        if (shift != 3)
+                            assert(expected < differences(shift));
+                    }
+                    frame(false, 200, 133);
+                }
+            }
         }
         assert(committed>0);std::puts("Page, locator and search: simple header, mode preserved, chrome fully restored, direct drag, explicit jump, previous place, keyboard, results preview and cancel verified.");
     }

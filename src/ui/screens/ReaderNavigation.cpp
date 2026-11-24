@@ -28,6 +28,7 @@ void ReaderScreen::openPage(bool hideControls) {
     browse_.first = pageSelected_;
     pageTouchControl_ = none;
     pageBarHidden_ = hideControls;
+    pageViewportDeferred_ = false;
     pageScrollFinished_ = false;
     pageSelectionPinned_ = hideControls;
     pageVerticalMoved_ = false;
@@ -48,7 +49,7 @@ bool ReaderScreen::revealPageControls() {
         // Showing the controls can shift the text to keep the selection visible.
         pageViewportBeforeControls_ = PageViewport{
             browse_.first, browse_.topLine, pageSelected_, browse_.offset,
-            browse_.scrollRemainder, browse_.displayArea, browse_.previousLines
+            browse_.minimumOffset, browse_.scrollRemainder, browse_.displayArea, browse_.previousLines
         };
     }
     pageBarHidden_ = false;
@@ -64,6 +65,8 @@ void ReaderScreen::hidePageControls() {
         browse_.first = saved.first;
         browse_.topLine = saved.topLine;
         browse_.offset = saved.offset;
+        browse_.minimumOffset = saved.minimumOffset;
+        pageViewportDeferred_ = saved.area.y != 0;
         browse_.scrollRemainder = saved.scrollRemainder;
         browse_.displayArea = saved.area;
         browse_.previousLines = std::move(saved.previousLines);
@@ -116,8 +119,9 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
     const bool enteringSwipe = pageBarHidden_ && browse_.layout.pageStart == SIZE_MAX;
     const bool follow = enteringSwipe || (pageGesture_ == PageGesture::horizontal && pageScrubMoved_)
                      || pageScrubFinished_;
+    const auto area = pageViewportDeferred_ ? browse_.displayArea : pageBody();
     PageReader::browse(browse_, ui, text_, [&](size_t index) { return pageTypeface(index, builtInPageSize); },
-                       typography_, revision, session, pageBody(), selected, scale, follow, highlightMode, size <= 2 || enteringSwipe);
+                       typography_, revision, session, area, selected, scale, follow, highlightMode, size <= 2 || enteringSwipe);
     const bool gestureFinished = pageScrollFinished_ || pageScrubFinished_;
     pageScrubFinished_ = false;
     if (verticalScroll && browse_.highlighted != selected)
@@ -127,15 +131,21 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
     pageScrollFinished_ = false;
     if (gestureFinished)
         syncPagePosition(nowMs);
-    for (size_t i = pageBarVisible() ? menu : previousLine; i < std::size(pageButtons); ++i) {
+    const auto drawButton = [&](size_t i) {
         const auto& item = pageButtons[i];
         const auto label = i == dictionary ? modern::copy(ui, modern::Copy::Dictionary) : item.label;
         const bool enabled = i == dictionary ? browse_.highlighted != SIZE_MAX : i == findPlace || i == backToBook;
         ui.label(item.rect, label, 13, enabled ? ui::themes::Accent : ui::themes::Muted, ui::TextAlign::Center);
-    }
-    if (pageBarVisible())
-        ui::modern::rule(ui,{0,43,640,1});
+    };
+    drawButton(previousLine);
+    drawButton(nextLine);
     ui.label({584,148,52,24},std::to_string(ReadingProgress::percent(browse_.topLine == SIZE_MAX ? browse_.first : browse_.topLine, ReadingLoop::wordCount(session)))+"%",11,ui::themes::Muted,ui::TextAlign::Center);
+    // Keep the toolbar last so its slots can clear without redrawing the text.
+    if (pageBarVisible()) {
+        for (size_t i = menu; i < previousLine; ++i)
+            drawButton(i);
+        ui::modern::rule(ui,{0,43,640,1});
+    }
 }
 void ReaderScreen::beginPageTouch(int x, int y, bool readingSwipe) {
     resetTouch();
@@ -147,10 +157,8 @@ void ReaderScreen::beginPageTouch(int x, int y, bool readingSwipe) {
     pageVerticalMoved_ = false;
     pageScrubMoved_ = false;
     pageTouchControl_ = (readingSwipe || ui::contains(pageBody(), x, y)) ? pageText : none;
-    if (pageTouchControl_ == pageText) {
-        pageScrollDirection_ = 0;
+    if (pageTouchControl_ == pageText)
         pageViewportBeforeControls_.reset();
-    }
     if (readingSwipe)
         return;
     for (size_t i = pageBarVisible() ? menu : previousLine; i < std::size(pageButtons); ++i) {
@@ -165,19 +173,17 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
     if (!touch)
         return true;
 
-    const auto hideBar = [&] {
-        if (settings_.pageControlsAutoHide && !pageBarHidden_) {
-            pageBarHidden_ = true;
+    const auto expandViewport = [&] {
+        if (pageViewportDeferred_) {
+            pageViewportDeferred_ = false;
+            // The last toolbar slots may still be live if two touch samples
+            // arrived before this frame. Clear them before painting above y=44.
             ui.invalidate();
         }
     };
-    const auto finishScroll = [&] {
-        pageScrollFinished_ = true;
-        hideBar();
-    };
     if (ui::hasTouch(*touch, ui::TouchCancel)) {
         if (pageGesture_ == PageGesture::vertical && pageVerticalMoved_)
-            finishScroll();
+            pageScrollFinished_ = true;
         else if (pageGesture_ == PageGesture::horizontal)
             pageScrubFinished_ = pageScrubMoved_;
         pageGesture_ = PageGesture::pending;
@@ -198,11 +204,19 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         if (pageGesture_ == PageGesture::pending) {
             if (std::abs(dx) >= horizontalSlop && 2 * std::abs(dx) > 3 * std::abs(dy)) {
                 pageGesture_ = PageGesture::horizontal;
-                pageVerticalHighlight_ = false;
                 pageScrubX_ = pageTouchX_ - (dx > 0 ? 6 : -6);
             } else if (std::abs(dy) >= verticalSlop && std::abs(dy) >= std::abs(dx)) {
                 pageGesture_ = PageGesture::vertical;
                 pageScrollY_ += dy > 0 ? verticalSlop - jitter : jitter - verticalSlop;
+            }
+            if (pageGesture_ != PageGesture::pending && settings_.pageControlsAutoHide && pageBarVisible()) {
+                // The gesture that dismisses the bar leaves the body at its
+                // current pixel position. Measure real motion from this sample.
+                pageBarHidden_ = true;
+                pageViewportDeferred_ = true;
+                pageScrollY_ = pageLastTouchY_ = touch->y;
+                pageScrubX_ = touch->x;
+                return true;
             }
         }
         if (pageGesture_ == PageGesture::vertical) {
@@ -223,10 +237,11 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
             const int direction = delta < 0 ? -1 : 1;
             // Small reversals around a stationary finger need more travel
             // than continuing a drag. Rebase to avoid a catch-up jump.
-            const bool reverses = pageScrollDirection_ != 0 && pageScrollDirection_ != direction;
+            const bool reverses = pageVerticalMoved_ && pageScrollDirection_ != direction;
             constexpr int reverseSlop = 5;
             const int slop = reverses ? reverseSlop : jitter;
             if (std::abs(delta) > slop) {
+                expandViewport();
                 browse_.scrollBy(delta - direction * slop);
                 pageScrollY_ = int(touch->y) + direction * jitter;
                 pageScrollDirection_ = direction;
@@ -241,6 +256,8 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
                     pageScrubX_ = touch->x;
                     break;
                 }
+                expandViewport();
+                pageVerticalHighlight_ = false;
                 pageSelected_ = word;
                 pageSelectionPinned_ = true;
                 pageScrubMoved_ = true;
@@ -256,13 +273,11 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
     pageTouchControl_ = none;
     pageGesture_ = PageGesture::pending;
     if (gesture == PageGesture::vertical) {
-        if (pageVerticalMoved_)
-            finishScroll();
+        pageScrollFinished_ = pageVerticalMoved_;
         return true;
     }
     if (gesture == PageGesture::horizontal) {
         pageScrubFinished_ = pageScrubMoved_;
-        hideBar();
         return true;
     }
     if (!ui::hasTouch(*touch, ui::TouchTap)
@@ -293,7 +308,12 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         browse_.step = down ? PageReader::ScrollStep::nextPage : PageReader::ScrollStep::previousPage;
         browse_.stepWord = PageReader::edgeWord(browse_, down);
         pageSelectionPinned_ = false;
-        finishScroll();
+        pageScrollFinished_ = true;
+        expandViewport();
+        if (settings_.pageControlsAutoHide && pageBarVisible()) {
+            pageBarHidden_ = true;
+            ui.invalidate();
+        }
         break;
     }
     case pageText: {

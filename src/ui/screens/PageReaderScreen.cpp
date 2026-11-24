@@ -1129,6 +1129,7 @@ namespace screens::PageReader {
                 browse.first = browse.topLine;
             browse.previousLines.clear();
             browse.offset = 0;
+            browse.minimumOffset = 0;
             browse.scrollRemainder = 0;
         }
         browse.first = std::min(browse.first, wordCount - 1);
@@ -1225,6 +1226,7 @@ namespace screens::PageReader {
         bool arrowTarget = false;
         const auto step = browse.step;
         if (step != ScrollStep::none) {
+            browse.minimumOffset = 0;
             const auto row = lineForWord(state, browse.stepWord);
             if (row < state.lineCount) {
                 const auto visible = browseViewport(browse);
@@ -1358,8 +1360,15 @@ namespace screens::PageReader {
             if (row < state.lineCount)
                 browse.offset = std::min(browse.offset, lineOffset(row));
         }
-        if (browse.offset < 0) {
-            browse.offset = 0;
+        if (headerMoved && oldViewportInset > 0 && browse.offset < 0) {
+            // Earlier lines fill the exposed space when available. At the
+            // beginning of the book, let the remaining space scroll away.
+            browse.minimumOffset = -oldViewportInset;
+        } else if (browse.offset >= 0) {
+            browse.minimumOffset = 0;
+        }
+        if (browse.offset < browse.minimumOffset) {
+            browse.offset = browse.minimumOffset;
             browse.scrollRemainder = 0;
             oldViewportInset = 0;
         }

@@ -86,6 +86,7 @@ namespace screens::PageReader {
         size_t topLine = SIZE_MAX;
         size_t highlighted = SIZE_MAX;
         int offset = 0;
+        int minimumOffset = 0;
         int scrollRemainder = 0;
         ScrollStep step = ScrollStep::none;
         size_t stepWord = SIZE_MAX;

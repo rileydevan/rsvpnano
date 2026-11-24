@@ -76,6 +76,7 @@ namespace screens {
         std::string placeExcerpt(size_t index, size_t maxWords = 32) const;
         bool pageBrowsing_ = false;
         bool pageBarHidden_ = false;
+        bool pageViewportDeferred_ = false;
         bool pageScrollFinished_ = false;
         bool pageHasScrolled_ = false;
         std::optional<uint32_t> pageProgressChangedAt_;
@@ -84,7 +85,7 @@ namespace screens {
         PageReader::BrowseState browse_;
         struct PageViewport {
             size_t first, topLine, selected;
-            int offset, scrollRemainder;
+            int offset, minimumOffset, scrollRemainder;
             ui::Rect area;
             std::vector<std::pair<size_t, int16_t>> previousLines;
         };

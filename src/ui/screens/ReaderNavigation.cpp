@@ -108,17 +108,21 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
     const auto revision = ui::Context::combine(typographyRevision_, size);
     const bool verticalScroll = (pageGesture_ == PageGesture::vertical && pageVerticalMoved_)
                              || (pageScrollFinished_ && browse_.step == PageReader::ScrollStep::none);
-    const size_t selected = verticalScroll && !pageSelectionPinned_ ? SIZE_MAX : pageSelected_;
-    auto highlightMode = PageReader::HighlightMode::selection;
-    if (verticalScroll || pageVerticalHighlight_) {
+    // Showing or dismissing the toolbar can change the reading area, but
+    // only a reading gesture or a word tap can change the lookup target.
+    const bool keepSelection = pageViewportBeforeControls_.has_value() || pageViewportDeferred_;
+    const size_t selected = verticalScroll && !pageSelectionPinned_ && !keepSelection ? SIZE_MAX : pageSelected_;
+    using HighlightMode = PageReader::HighlightMode;
+    auto highlightMode = keepSelection ? HighlightMode::keepSelection : HighlightMode::selection;
+    if (!keepSelection && (verticalScroll || pageVerticalHighlight_)) {
         const bool keepSelectionAhead = pageScrollDirection_ > 0 || (!verticalScroll && pageSelectionPinned_);
-        highlightMode = keepSelectionAhead ? PageReader::HighlightMode::departingScrollLineForward
-                                           : PageReader::HighlightMode::departingScrollLine;
+        highlightMode = keepSelectionAhead ? HighlightMode::departingScrollLineForward
+                                           : HighlightMode::departingScrollLine;
     }
     // Choose the reading position before showing the first swipe-entry frame.
     const bool enteringSwipe = pageBarHidden_ && browse_.layout.pageStart == SIZE_MAX;
-    const bool follow = enteringSwipe || (pageGesture_ == PageGesture::horizontal && pageScrubMoved_)
-                     || pageScrubFinished_;
+    const bool follow = enteringSwipe || (!keepSelection && ((pageGesture_ == PageGesture::horizontal && pageScrubMoved_)
+                     || pageScrubFinished_));
     const auto area = pageViewportDeferred_ ? browse_.displayArea : pageBody();
     PageReader::browse(browse_, ui, text_, [&](size_t index) { return pageTypeface(index, builtInPageSize); },
                        typography_, revision, session, area, selected, scale, follow, highlightMode, size <= 2 || enteringSwipe);
@@ -157,8 +161,6 @@ void ReaderScreen::beginPageTouch(int x, int y, bool readingSwipe) {
     pageVerticalMoved_ = false;
     pageScrubMoved_ = false;
     pageTouchControl_ = (readingSwipe || ui::contains(pageBody(), x, y)) ? pageText : none;
-    if (pageTouchControl_ == pageText)
-        pageViewportBeforeControls_.reset();
     if (readingSwipe)
         return;
     for (size_t i = pageBarVisible() ? menu : previousLine; i < std::size(pageButtons); ++i) {
@@ -174,6 +176,7 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         return true;
 
     const auto expandViewport = [&] {
+        pageViewportBeforeControls_.reset();
         if (pageViewportDeferred_) {
             pageViewportDeferred_ = false;
             // The last toolbar slots may still be live if two touch samples
@@ -213,6 +216,7 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
                 // The gesture that dismisses the bar leaves the body at its
                 // current pixel position. Measure real motion from this sample.
                 pageBarHidden_ = true;
+                pageViewportBeforeControls_.reset();
                 pageViewportDeferred_ = true;
                 pageScrollY_ = pageLastTouchY_ = touch->y;
                 pageScrubX_ = touch->x;
@@ -303,7 +307,6 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         break;
     case previousLine:
     case nextLine: {
-        pageViewportBeforeControls_.reset();
         const bool down = control == nextLine;
         browse_.step = down ? PageReader::ScrollStep::nextPage : PageReader::ScrollStep::previousPage;
         browse_.stepWord = PageReader::edgeWord(browse_, down);
@@ -319,6 +322,7 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
     case pageText: {
         const size_t word = PageReader::wordAtPoint(browse_, touch->x, touch->y);
         if (word != SIZE_MAX) {
+            pageViewportBeforeControls_.reset();
             pageVerticalHighlight_ = false;
             pageSelected_ = word;
             pageSelectionPinned_ = true;

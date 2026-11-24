@@ -930,6 +930,8 @@ namespace screens::PageReader {
                             return selected;
                         return automatic;
                     }
+                    if (mode == HighlightMode::keepSelection)
+                        return selected;
                     if (fullyVisible(wordAt(state, selected), line, viewport)) {
                         if (mode == HighlightMode::selection)
                             return selected;
@@ -1269,8 +1271,14 @@ namespace screens::PageReader {
                 }
                 const auto visible = browseViewport(browse);
                 const auto& line = state.lines[row];
-                const int top = line.ink.h > 0 ? line.ink.y : line.top;
-                const int bottom = line.ink.h > 0 ? line.ink.y + line.ink.h : line.bottom;
+                auto ink = line.ink;
+                if (highlightMode == HighlightMode::keepSelection) {
+                    const auto& word = wordAt(state, selected);
+                    if (word.inkKnown && word.ink.h > 0)
+                        ink = word.ink;
+                }
+                const int top = ink.h > 0 ? ink.y : line.top;
+                const int bottom = ink.h > 0 ? ink.y + ink.h : line.bottom;
                 if (top < visible.y)
                     browse.offset -= visible.y - top;
                 else if (bottom > visible.y + visible.h)

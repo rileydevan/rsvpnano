@@ -728,9 +728,9 @@ namespace {
             assert(reader.revealPageControls());
             ui.invalidate();
             frame(false, 0, 0);
-            const auto lookupWord = reader.pageHighlightedWord();
+            assert(reader.pageHighlightedWord() == selection);
             tap(400, 20);
-            assert(screen == screens::Screen::Dictionary && dictionary::previewLookupWord == lookupWord);
+            assert(screen == screens::Screen::Dictionary && dictionary::previewLookupWord == selection);
             tap(42, 22);
             verifyReturn();
 
@@ -741,6 +741,37 @@ namespace {
             assert(screen == screens::Screen::Read);
             tap(80, 142);
             verifyReturn();
+        }
+        // Opening the toolbar must keep the exact word chosen by vertical
+        // scrolling, even when the new top edge cuts into its reading row.
+        for (uint8_t size = 0; size < 5; ++size) {
+            reading.setPageTextSize(size);
+            for (int travel : {9, 28, 64, -28}) {
+                ReadingLoop::seekTo(reader.session, travel < 0 ? 100 : 0);
+                reader.openPage(true);
+                ui.invalidate();
+                frame(false, 0, 0);
+                const int start = 100;
+                const int end = start - travel;
+                const int direction = end < start ? -1 : 1;
+                frame(true, 200, start);
+                for (int y = start; y != end; y += direction)
+                    frame(true, 200, y + direction);
+                frame(false, 200, end);
+                frame(false, 0, 0);
+                const auto word = reader.pageHighlightedWord();
+                assert(word != SIZE_MAX);
+                assert(reader.revealPageControls());
+                ui.invalidate();
+                frame(false, 0, 0);
+                assert(reader.pageHighlightedWord() == word);
+                frame(false, 0, 0);
+                assert(reader.pageHighlightedWord() == word);
+                tap(400, 20);
+                assert(screen == screens::Screen::Dictionary && dictionary::previewLookupWord == word);
+                tap(42, 22);
+                assert(screen == screens::Screen::Reader && reader.pageHighlightedWord() == word);
+            }
         }
         // With auto-hide on, locking either drag axis removes only the
         // toolbar. Holding still or lifting immediately keeps the same text.

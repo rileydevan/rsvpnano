@@ -351,6 +351,7 @@ namespace {
         loadSamplePage(reader, words);
         reader.openPage();auto screen=screens::Screen::Reader;uint32_t now=100000;
         dictionary::Dictionary dictionary;
+        screens::ChaptersScreen chapters;
         const auto frame=[&](bool down,int x,int y) {
             contact={down,uint16_t(x),uint16_t(y)};ui.pollTouch(now+=25);
             ui.setModernPresentation(screen!=screens::Screen::Reader);ui.setModernReadingPalette(screen==screens::Screen::Reader);
@@ -369,6 +370,13 @@ namespace {
             else if (screen == screens::Screen::Read) {
                 if (screens::modern::menu(ui, "Sample", "", 0, true, settings.settings().interface, screen)
                     == screens::Action::Resume)
+                    screen = screens::Screen::Reader;
+            } else if (screen == screens::Screen::Chapters) {
+                const auto action = chapters.draw(ui, reader.session.metadata.chapters, reader.session,
+                                                  settings.settings().reading, now, screen);
+                if (action == screens::Action::OpenChapter)
+                    reader.reopenPageAtChapter(now);
+                if (action == screens::Action::Resume || action == screens::Action::OpenChapter)
                     screen = screens::Screen::Reader;
             } else reader.drawLocator(ui,screen,preferences,now);
             ui.endFrame();
@@ -871,6 +879,40 @@ namespace {
                 }
             }
         }
+        ReadingLoop::seekTo(reader.session, 0);
+        reader.openPage();
+        frame(false, 0, 0);
+        tap(60, 20); // Page toolbar to the main menu
+        tap(470, 35);
+        assert(screen == screens::Screen::Chapters);
+        tap(150, 104); // Second chapter
+        assert(reader.session.state.wordIndex == 0);
+        tap(535, 20); // Back to book without opening the chapter
+        assert(screen == screens::Screen::Reader && reader.pageBrowsing() && reader.pageHighlightedWord() == 0);
+        assert(reader.revealPageControls());
+        ui.invalidate();
+        frame(false, 0, 0);
+        tap(60, 20);
+        tap(470, 35);
+        tap(150, 104);
+        tap(550, 140); // Open chapter
+        assert(screen == screens::Screen::Reader && reader.pageBrowsing());
+        assert(reader.session.state.wordIndex == 180 && reader.pageHighlightedWord() == 180);
+        frame(false, 0, 0);
+        assert(reader.pageHighlightedWord() == 180);
+
+        assert(reader.revealPageControls());
+        ui.invalidate();
+        frame(false, 0, 0);
+        tap(552, 22); // Leave Page for paused RSVP
+        assert(!reader.pageBrowsing());
+        screen = screens::Screen::Read;
+        frame(false, 0, 0);
+        tap(470, 35);
+        tap(150, 66); // First chapter
+        tap(550, 140);
+        assert(screen == screens::Screen::Reader && !reader.pageBrowsing() && !reader.session.playing);
+        assert(reader.session.state.wordIndex == 0);
         assert(committed>0);std::puts("Page, locator and search: simple header, mode preserved, chrome fully restored, direct drag, explicit jump, previous place, keyboard, results preview and cancel verified.");
     }
 

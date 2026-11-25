@@ -248,7 +248,7 @@ void test_chapter_browsing_only_seeks_on_explicit_open() {
     TEST_ASSERT_EQUAL(0, reader.state.wordIndex);
     f.tap(draw, 414, 138);
     TEST_ASSERT_EQUAL(0, reader.state.wordIndex);
-    TEST_ASSERT_EQUAL(static_cast<int>(screens::Action::Resume), static_cast<int>(f.tap(draw, 550, 140)));
+    TEST_ASSERT_EQUAL(static_cast<int>(screens::Action::OpenChapter), static_cast<int>(f.tap(draw, 550, 140)));
     TEST_ASSERT_EQUAL(20, reader.state.wordIndex);
 }
 

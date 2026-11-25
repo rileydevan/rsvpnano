@@ -630,6 +630,9 @@ void App::handleScreenAction(screens::Action action, uint32_t nowMs) {
         screen_ = screens::Screen::Reader;
         renderScreen(nowMs);
         return;
+    case screens::Action::OpenChapter:
+        readerScreen_.reopenPageAtChapter(nowMs);
+        [[fallthrough]];
     case screens::Action::Resume:
         ReadingLoop::pause(readerScreen_.session);
         screen_ = screens::Screen::Reader;

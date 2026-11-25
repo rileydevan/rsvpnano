@@ -30,9 +30,12 @@ std::string folded(std::string text) {
 void ReaderScreen::openPage(bool hideControls) {
     ReadingLoop::pause(session);
     pageBrowsing_=true;pageSelected_=session.state.wordIndex;
-    browse_ = {};
+    PageReader::BrowseState nextPage;
+    nextPage.first = pageSelected_;
+    nextPage.viewportCanvas = std::move(browse_.viewportCanvas);
+    nextPage.scaleCanvas = std::move(browse_.scaleCanvas);
+    browse_ = std::move(nextPage);
     pageViewportBeforeControls_.reset();
-    browse_.first = pageSelected_;
     pageTouchControl_ = none;
     pageBarHidden_ = hideControls;
     pageViewportDeferred_ = false;
@@ -44,6 +47,15 @@ void ReaderScreen::openPage(bool hideControls) {
     pageScrubFinished_ = false;
     pageHasScrolled_ = false;
     pageGesture_ = PageGesture::pending;
+}
+void ReaderScreen::reopenPageAtChapter(uint32_t nowMs) {
+    if (!pageBrowsing_)
+        return;
+
+    openPage(true);
+    // Start the viewport at the chapter instead of following a swipe anchor.
+    browse_.topLine = pageSelected_;
+    pageProgressChangedAt_ = nowMs;
 }
 ui::Rect ReaderScreen::pageBody() const {
     const int16_t top = pageBarVisible() ? pageHeaderHeight : 0;
@@ -127,7 +139,7 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
                                            : HighlightMode::departingScrollLine;
     }
     // Choose the reading position before showing the first swipe-entry frame.
-    const bool enteringSwipe = pageBarHidden_ && browse_.layout.pageStart == SIZE_MAX;
+    const bool enteringSwipe = pageBarHidden_ && browse_.topLine == SIZE_MAX;
     const bool follow = enteringSwipe || (!keepSelection && ((pageGesture_ == PageGesture::horizontal && pageScrubMoved_)
                      || pageScrubFinished_));
     const auto area = pageViewportDeferred_ ? browse_.displayArea : pageBody();

@@ -62,7 +62,7 @@ namespace screens {
             if (chapters.empty()) {
                 if (button(ui, {16, 72, 608, 72}, ui.text(UiText::StartReading), Style::Primary)) {
                     ReadingLoop::seekTo(reader, 0);
-                    return Action::Resume;
+                    return Action::OpenChapter;
                 }
                 return Action::None;
             }
@@ -106,7 +106,7 @@ namespace screens {
             ui::modern::rule(ui, {448, 52, 1, 112});
             if (button(ui, {460, 124, 164, 40}, modern::caption(ui, UiText::Read, "Open chapter ↗"), Style::Primary)) {
                 ReadingLoop::seekTo(reader, chapters[centeredIndex_].wordIndex);
-                return Action::Resume;
+                return Action::OpenChapter;
             }
             return Action::None;
         }

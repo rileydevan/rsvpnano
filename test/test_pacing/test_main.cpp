@@ -617,8 +617,61 @@ void test_short_sentence_ends_and_titles() {
     }
 }
 
+void test_rsvp_titles_have_their_own_frames_and_resume_without_replaying() {
+    ReadingSession session;
+    session.chapterPlayback.enabled = true;
+    session.metadata.chapters = {{"First chapter", 0}, {"Straße lights tonight", 3}};
+    const std::vector<std::string> words{"One", "two", "three", "Another", "day", "starts", "here"};
+    ReadingLoop::setWords(session, words, 0);
+    settings::ReadingSettings config;
+    config.mode = settings::ReadingMode::rsvp;
+    config.wpm = 300;
+    ReadingLoop::start(session, 1000, config.mode);
+    TEST_ASSERT_EQUAL_STRING("FIRST", session.currentWord.c_str());
+    TEST_ASSERT_EQUAL(0, session.state.wordIndex);
+
+    // A late frame advances by one title word and resets the pacing clock.
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 5000));
+    TEST_ASSERT_EQUAL_STRING("CHAPTER", session.currentWord.c_str());
+    TEST_ASSERT_EQUAL(1, *session.state.titleWord);
+    TEST_ASSERT_EQUAL(5000, session.lastAdvanceMs);
+    ReadingLoop::pause(session);
+    ReadingLoop::start(session, 6000, config.mode);
+    TEST_ASSERT_EQUAL_STRING("CHAPTER", session.currentWord.c_str());
+    const auto duration = ReadingLoop::currentWordDurationMs(session, config);
+    TEST_ASSERT_FALSE(ReadingLoop::update(session, config, 6000 + duration - 1));
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 6000 + duration));
+    TEST_ASSERT_EQUAL_STRING("One", session.currentWord.c_str());
+    TEST_ASSERT_FALSE(session.state.titleWord.has_value());
+
+    ReadingLoop::pause(session);
+    ReadingLoop::start(session, 8000, config.mode);
+    TEST_ASSERT_EQUAL_STRING("One", session.currentWord.c_str());
+    // Even during catch-up the first title word must get a full frame.
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 20000));
+    TEST_ASSERT_EQUAL_STRING("STRASSE", session.currentWord.c_str());
+    TEST_ASSERT_EQUAL(3, session.state.wordIndex);
+    TEST_ASSERT_EQUAL(20000, session.lastAdvanceMs);
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 30000));
+    TEST_ASSERT_EQUAL_STRING("LIGHTS", session.currentWord.c_str());
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 40000));
+    TEST_ASSERT_EQUAL_STRING("TONIGHT", session.currentWord.c_str());
+    TEST_ASSERT_TRUE(ReadingLoop::update(session, config, 50000));
+    TEST_ASSERT_EQUAL_STRING("Another", session.currentWord.c_str());
+    TEST_ASSERT_EQUAL(3, session.state.wordIndex);
+
+    ReadingLoop::seekTo(session, 3);
+    TEST_ASSERT_TRUE(ReadingLoop::openChapterTitle(session, 1));
+    TEST_ASSERT_EQUAL_STRING("LIGHTS", session.currentWord.c_str());
+    ReadingLoop::seekRelative(session, 3, 1);
+    TEST_ASSERT_EQUAL_STRING("day", session.currentWord.c_str());
+    TEST_ASSERT_FALSE(session.state.titleInRsvp);
+    TEST_ASSERT_FALSE(session.state.titleWord.has_value());
+}
+
 int main(void) {
     UNITY_BEGIN();
+    RUN_TEST(test_rsvp_titles_have_their_own_frames_and_resume_without_replaying);
     RUN_TEST(test_requested_pause_stops_inside_catchup_and_waits_for_manual_resume);
     RUN_TEST(test_requested_pause_owns_deadline_and_chunk_boundary);
     RUN_TEST(test_short_sentence_ends_and_titles);

@@ -7,6 +7,7 @@
 
 #include "library/BookMetadata.h"
 #include "reader/ReadingState.h"
+#include "text/ChapterTitle.h"
 #include "library/IndexedBookStore.h"
 
 struct ReadingSession {
@@ -21,6 +22,12 @@ struct ReadingSession {
     uint8_t displayWordCount = 1;
     size_t displayWordIndex = static_cast<size_t>(-1);
     reading::State state;
+    struct ChapterPlayback {
+        size_t nextWord = SIZE_MAX;
+        std::vector<ChapterTitle::Word> words;
+        bool enabled = false;
+        bool bidi = false;
+    } chapterPlayback;
 
     std::string_view localeAt(size_t index) const {
         return state.overrides.locale && !state.overrides.locale->empty()

@@ -20,7 +20,9 @@ namespace ReadingLoop {
     };
 
     void begin(ReadingSession& session, uint32_t nowMs);
-    void start(ReadingSession& session, uint32_t nowMs);
+    void start(ReadingSession& session, uint32_t nowMs, settings::ReadingMode mode = settings::ReadingMode::rsvp);
+    bool openChapterTitle(ReadingSession& session, uint32_t titleWord);
+    void leaveChapterTitle(ReadingSession& session);
     void pause(ReadingSession& session);
     bool update(ReadingSession& session, const settings::ReadingSettings& settings, uint32_t nowMs,
                 bool allowCatchUp = true, bool stopAtSentenceEnd = false);

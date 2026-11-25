@@ -20,6 +20,7 @@ namespace reading {
         settings::ReadingOverrides overrides;
         // When set, wordIndex anchors the chapter's first body word.
         std::optional<uint32_t> titleWord;
+        bool titleInRsvp = false;
 
         bool operator==(const State&) const = default;
     };

@@ -117,7 +117,8 @@ void App::begin() {
     // transition. Do not introduce a second splash delay or fake a Ready state.
     if(modernStartup){
         statusDestination_ = settingsStore_.settings().interface.onboardingComplete
-            ? (readerScreen_.pageBrowsing() ? screens::Screen::Reader : screens::Screen::Read)
+            ? ((readerScreen_.pageBrowsing() || readerScreen_.session.state.titleInRsvp)
+                   ? screens::Screen::Reader : screens::Screen::Read)
             : screens::Screen::Onboarding;
         if(!settingsStore_.settings().interface.onboardingComplete)onboardingScreen_.begin(immediateUi_,settingsStore_.settings(),millis());
         if(settingsStore_.settings().reading.mode==settings::ReadingMode::page){
@@ -633,7 +634,7 @@ void App::handleScreenAction(screens::Action action, uint32_t nowMs) {
         renderScreen(nowMs);
         return;
     case screens::Action::OpenChapter:
-        readerScreen_.reopenPageAtChapter(nowMs);
+        readerScreen_.openSelectedChapter(nowMs);
         [[fallthrough]];
     case screens::Action::Resume:
         ReadingLoop::pause(readerScreen_.session);
@@ -852,8 +853,9 @@ void App::handleInput(Input::ActionMask actions, uint32_t nowMs) {
 
 void App::openDictionary(uint32_t nowMs, std::optional<size_t> pageWord) {
     readerScreen_.pauseImmediately(prefs_, nowMs);
-    if (pageWord) {
-        dictionary_.open(readerScreen_.session, pageWord, screens::Screen::Reader,
+    const auto word = pageWord ? pageWord : readerScreen_.prepareTitleLookup();
+    if (word) {
+        dictionary_.open(readerScreen_.session, word, pageWord ? screens::Screen::Reader : screens::Screen::QuickControls,
                          [this](size_t word) { return readerScreen_.pageLookupWordAt(word); }, readerScreen_.pageWordCount());
     } else {
         dictionary_.open(readerScreen_.session);

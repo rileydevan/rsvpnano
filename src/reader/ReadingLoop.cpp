@@ -877,6 +877,46 @@ namespace ReadingLoop {
             session.currentWord = wordAt(session, session.state.wordIndex);
         }
 
+        void setNextChapter(ReadingSession& session, size_t firstWord) {
+            auto& playback = session.chapterPlayback;
+            if (!playback.enabled) {
+                playback.nextWord = SIZE_MAX;
+                return;
+            }
+            const auto& chapters = session.metadata.chapters;
+            const auto next = std::ranges::lower_bound(chapters, firstWord, {}, &ChapterMarker::wordIndex);
+            playback.nextWord = next == chapters.end() ? SIZE_MAX : next->wordIndex;
+        }
+
+        void clearTitle(ReadingSession& session) {
+            session.state.titleWord.reset();
+            if (session.state.titleInRsvp) {
+                session.state.titleInRsvp = false;
+                session.chapterPlayback.words.clear();
+                session.chapterPlayback.bidi = false;
+            }
+        }
+
+        void showTitleWord(ReadingSession& session, uint32_t index) {
+            session.state.titleInRsvp = true;
+            session.state.titleWord = index;
+            session.displayWordCount = 1;
+            session.displayWordIndex = SIZE_MAX;
+            session.currentWord = session.chapterPlayback.words[index].display;
+        }
+
+        uint32_t tokenDuration(const ReadingSession& session, const settings::ReadingSettings& settings,
+                               std::string_view word, bool nextWordStartsLowercase) {
+            if (pacingMode(session) == settings::ReadingPacing::cjkPhrase) {
+                const uint32_t characters =
+                    static_cast<uint32_t>(std::max(1, codepointCount(word, UnicodeText::isWordCharacter)));
+                const uint32_t base = (60'000UL * characters + settings.wpm - 1) / settings.wpm;
+                return base + scaledDelayMs(punctuationPausePercentForWord(word, false),
+                                            settings.pacing.punctuationDelayMs);
+            }
+            return durationForWord(word, nextWordStartsLowercase, 60000UL / settings.wpm, settings.pacing);
+        }
+
         bool advance(ReadingSession& session, size_t steps) {
             const size_t count = wordCount(session);
             if (count == 0) {
@@ -903,6 +943,8 @@ namespace ReadingLoop {
     } // namespace
 
     void begin(ReadingSession& session, uint32_t nowMs) {
+        clearTitle(session);
+        setNextChapter(session, 0);
         session.playing = false;
         session.state.wordIndex = 0;
         session.lastAdvanceMs = nowMs;
@@ -910,6 +952,8 @@ namespace ReadingLoop {
     }
 
     void setWords(ReadingSession& session, std::span<const std::string> words, uint32_t nowMs) {
+        clearTitle(session);
+        setNextChapter(session, 0);
         session.state.wordIndex = 0;
         session.lastAdvanceMs = nowMs;
         session.words = words;
@@ -919,6 +963,8 @@ namespace ReadingLoop {
     }
 
     void setBookStore(ReadingSession& session, const IndexedBookStore& store, uint32_t nowMs) {
+        clearTitle(session);
+        setNextChapter(session, 0);
         session.state.wordIndex = 0;
         session.lastAdvanceMs = nowMs;
         session.words = {};
@@ -927,8 +973,44 @@ namespace ReadingLoop {
         setCurrentWordFromIndex(session);
     }
 
-    void start(ReadingSession& session, uint32_t nowMs) {
-        session.state.titleWord.reset();
+    bool openChapterTitle(ReadingSession& session, uint32_t titleWord) {
+        auto& playback = session.chapterPlayback;
+        if (!playback.enabled || session.state.wordIndex >= wordCount(session))
+            return false;
+        const auto& chapters = session.metadata.chapters;
+        const size_t anchor = session.state.wordIndex;
+        auto chapter = std::ranges::lower_bound(chapters, anchor, {}, &ChapterMarker::wordIndex);
+        setNextChapter(session, anchor + 1);
+        for (; chapter != chapters.end() && chapter->wordIndex == anchor; ++chapter) {
+            bool bidi = false;
+            auto words = ChapterTitle::words(chapter->title, bidi);
+            if (words.empty())
+                continue;
+            if (titleWord >= words.size())
+                return false;
+            playback.words = std::move(words);
+            playback.bidi = bidi;
+            showTitleWord(session, titleWord);
+            return true;
+        }
+        return false;
+    }
+
+    void leaveChapterTitle(ReadingSession& session) {
+        const bool wasShowing = session.state.titleInRsvp;
+        clearTitle(session);
+        if (wasShowing)
+            setCurrentWordFromIndex(session);
+    }
+
+    void start(ReadingSession& session, uint32_t nowMs, settings::ReadingMode mode) {
+        if (mode != settings::ReadingMode::rsvp) {
+            leaveChapterTitle(session);
+        } else if (!session.state.titleInRsvp) {
+            session.state.titleWord.reset();
+            if (session.state.wordIndex == session.chapterPlayback.nextWord)
+                openChapterTitle(session, 0);
+        }
         session.lastAdvanceMs = nowMs;
         session.playing = true;
     }
@@ -951,6 +1033,16 @@ namespace ReadingLoop {
                 pause(session);
                 break;
             }
+            if (session.state.titleInRsvp) {
+                const uint32_t next = *session.state.titleWord + 1;
+                if (next < session.chapterPlayback.words.size())
+                    showTitleWord(session, next);
+                else
+                    leaveChapterTitle(session);
+                // Each title word, and the first body word, gets its own frame.
+                session.lastAdvanceMs = nowMs;
+                return true;
+            }
             if (settings.mode == settings::ReadingMode::chunks) session.lastAdvanceMs = nowMs;
             else session.lastAdvanceMs += durationMs;
             const size_t steps = settings.mode == settings::ReadingMode::chunks ? displayWordCount(session) : 1;
@@ -958,9 +1050,18 @@ namespace ReadingLoop {
                 session.playing = false;
                 break;
             }
+            const size_t previous = session.state.wordIndex;
             if (!advance(session, steps))
                 break;
             changed = true;
+            if (session.state.wordIndex < previous || (session.state.wordIndex > session.chapterPlayback.nextWord))
+                setNextChapter(session, session.state.wordIndex);
+            if (session.state.wordIndex == session.chapterPlayback.nextWord
+                && settings.mode == settings::ReadingMode::rsvp && openChapterTitle(session, 0)) {
+                // A delayed frame may skip ordinary words, but never the title.
+                session.lastAdvanceMs = nowMs;
+                break;
+            }
         }
         return changed;
     }
@@ -983,18 +1084,17 @@ namespace ReadingLoop {
         const bool nextWordStartsLowercase =
             nextIndex < wordCount(session) && startsWithLowercaseLetter(wordAt(session, nextIndex));
 
-        if (pacingMode(session) == settings::ReadingPacing::cjkPhrase) {
-            const uint32_t characters =
-                static_cast<uint32_t>(std::max(1, codepointCount(word, UnicodeText::isWordCharacter)));
-            const uint32_t base = (60'000UL * characters + settings.wpm - 1) / settings.wpm;
-            return base
-                 + scaledDelayMs(punctuationPausePercentForWord(word, false),
-                                 settings.pacing.punctuationDelayMs);
-        }
-        return durationForWord(word, nextWordStartsLowercase, 60000UL / settings.wpm, settings.pacing);
+        return tokenDuration(session, settings, word, nextWordStartsLowercase);
     }
 
     uint32_t currentWordDurationMs(const ReadingSession& session, const settings::ReadingSettings& settings) {
+        if (session.state.titleInRsvp) {
+            const auto& words = session.chapterPlayback.words;
+            const size_t index = *session.state.titleWord;
+            const bool nextStartsLowercase = index + 1 < words.size()
+                && startsWithLowercaseLetter(words[index + 1].original);
+            return tokenDuration(session, settings, words[index].original, nextStartsLowercase);
+        }
         uint32_t duration = 0;
         const size_t count = settings.mode == settings::ReadingMode::chunks ? displayWordCount(session) : 1;
         for (size_t n = 0; n < count && session.state.wordIndex + n < wordCount(session); ++n)
@@ -1016,22 +1116,27 @@ namespace ReadingLoop {
     }
 
     bool currentWordEndsSentence(const ReadingSession& session) {
+        if (session.state.titleInRsvp)
+            return *session.state.titleWord + 1 == session.chapterPlayback.words.size();
         return wordEndsSentenceAt(session, session.state.wordIndex + displayWordCount(session) - 1);
     }
 
     bool atEnd(const ReadingSession& session) {
+        if (session.state.titleInRsvp)
+            return false;
         const size_t count = wordCount(session);
         return count == 0 || session.state.wordIndex + displayWordCount(session) >= count;
     }
 
     void seekTo(ReadingSession& session, size_t wordIndex) {
-        session.state.titleWord.reset();
+        clearTitle(session);
         const size_t count = wordCount(session);
         if (count == 0) {
             session.currentWord.clear();
             return;
         }
         session.state.wordIndex = static_cast<uint32_t>(std::min(wordIndex, count - 1));
+        setNextChapter(session, session.state.wordIndex + 1);
         setCurrentWordFromIndex(session);
     }
 
@@ -1049,8 +1154,7 @@ namespace ReadingLoop {
             if (nextIndex < 0)
                 nextIndex += static_cast<int>(count);
         }
-        session.state.wordIndex = static_cast<size_t>(nextIndex);
-        setCurrentWordFromIndex(session);
+        seekTo(session, static_cast<size_t>(nextIndex));
     }
 
     bool seekParagraph(ReadingSession& session, int steps) {

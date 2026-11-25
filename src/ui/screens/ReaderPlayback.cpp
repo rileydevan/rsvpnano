@@ -38,7 +38,10 @@ namespace screens {
         ReadingLoop::update(session, settings_, nowMs, true, pauseAtSentenceEndRequested_);
 #else
         const size_t previousIndex = session.state.wordIndex;
+        const bool showedTitle = session.state.titleInRsvp;
         if (ReadingLoop::update(session, settings_, nowMs, true, pauseAtSentenceEndRequested_)) {
+            if (showedTitle || session.state.titleInRsvp)
+                pageProgressChangedAt_ = nowMs;
             ReadingProgress::saveChapterTransition(session, preferences, store, previousIndex, session.state.wordIndex,
                                                    nowMs);
         }
@@ -54,7 +57,7 @@ namespace screens {
         pauseAtSentenceEndRequested_ = false;
         wpmFeedbackUntilMs_ = 0;
         prepareChunk();
-        ReadingLoop::start(session, nowMs);
+        ReadingLoop::start(session, nowMs, settings_.mode);
     }
 
     void ReaderScreen::requestPause(Preferences& preferences, uint32_t nowMs) {

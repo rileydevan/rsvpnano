@@ -10,6 +10,8 @@ void ReaderScreen::prepareChunk() {
         chunkLayoutReady_ = false;
         return;
     }
+    if (session.state.titleInRsvp)
+        ReadingLoop::leaveChapterTitle(session);
     const auto index = session.state.wordIndex;
     if (session.displayWordIndex == index && chunkRevision_ == typographyRevision_) return;
     session.displayWordIndex = index;

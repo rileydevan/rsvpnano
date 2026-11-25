@@ -158,6 +158,7 @@ namespace ReadingProgress {
                 state.identity = identity;
                 state.reading.wordIndex = std::min(wordIndex, identity.wordCount - 1);
                 state.reading.titleWord.reset();
+                state.reading.titleInRsvp = false;
                 return writeBookState(bookPath, std::move(state));
             })
             .transform([&] {
@@ -241,13 +242,14 @@ namespace ReadingProgress {
                                size_t previousWordIndex, size_t currentWordIndex, uint32_t nowMs) {
         if (!session.stored())
             return false;
-        const auto chapter = std::ranges::find_if(session.metadata.chapters, [&](const ChapterMarker& candidate) {
-            return candidate.wordIndex != 0 && candidate.wordIndex > previousWordIndex
-                && candidate.wordIndex <= currentWordIndex;
-        });
-        if (chapter == session.metadata.chapters.end())
+        if (currentWordIndex <= previousWordIndex)
             return false;
-        ReadingLoop::seekTo(session, chapter->wordIndex);
+        const auto& chapters = session.metadata.chapters;
+        const auto chapter = std::ranges::upper_bound(chapters, previousWordIndex, {}, &ChapterMarker::wordIndex);
+        if (chapter == chapters.end() || chapter->wordIndex > currentWordIndex)
+            return false;
+        if (chapter->wordIndex != currentWordIndex && !session.state.titleInRsvp)
+            ReadingLoop::seekTo(session, chapter->wordIndex);
         save(session, preferences, true, nowMs);
         mirror(session, store);
         return true;

@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "reader/ReadingLoop.h"
+#include "text/ChapterTitle.h"
 
 namespace screens::PageReader {
     // Page coordinates include title words. The underlying book and its word
@@ -41,15 +42,10 @@ namespace screens::PageReader {
         }
 
     private:
-        struct Word {
-            std::string display;
-            std::string_view original; // Chapter metadata owns this text.
-        };
-        static std::vector<Word> headingWords(std::string_view title, bool& bidi);
         struct Heading {
             size_t bookWord;
             size_t pageStart;
-            std::vector<Word> words;
+            std::vector<ChapterTitle::Word> words;
             bool bidi;
             size_t end() const { return pageStart + words.size(); }
         };

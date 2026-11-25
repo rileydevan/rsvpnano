@@ -56,7 +56,8 @@ namespace screens {
         void pauseImmediately(Preferences& preferences, uint32_t nowMs) { finishPause(preferences, nowMs); }
         void resumeNow(uint32_t nowMs) { pageBrowsing_ = false; start(nowMs, true); }
         void openPage(bool hideControls = false);
-        void reopenPageAtChapter(uint32_t nowMs);
+        void openSelectedChapter(uint32_t nowMs);
+        std::optional<size_t> prepareTitleLookup();
         void syncPagePosition(uint32_t nowMs);
         void drawPage(ui::Context& ui, uint32_t nowMs);
         size_t pageSelectedPosition() const { return browse_.highlighted; }

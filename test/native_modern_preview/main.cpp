@@ -376,7 +376,7 @@ namespace {
                 const auto action = chapters.draw(ui, reader.session.metadata.chapters, reader.session,
                                                   settings.settings().reading, now, screen);
                 if (action == screens::Action::OpenChapter)
-                    reader.reopenPageAtChapter(now);
+                    reader.openSelectedChapter(now);
                 if (action == screens::Action::Resume || action == screens::Action::OpenChapter)
                     screen = screens::Screen::Reader;
             } else reader.drawLocator(ui,screen,preferences,now);
@@ -881,6 +881,8 @@ namespace {
             }
         }
         reader.session.metadata.chapters = {{"The garden", 0}, {"A quiet path", 180}};
+        reader.session.chapterPlayback.enabled = true;
+        reading.mode = settings::ReadingMode::rsvp;
         ReadingLoop::seekTo(reader.session, 0);
         reader.openPage();
         frame(false, 0, 0);
@@ -900,6 +902,7 @@ namespace {
         tap(550, 140); // Open chapter
         assert(screen == screens::Screen::Reader && reader.pageBrowsing());
         assert(reader.session.state.wordIndex == 180 && reader.pageHighlightedWord() == 180);
+        assert(reader.pageLookupWordAt(reader.pageSelectedPosition()) == "A");
         frame(false, 0, 0);
         assert(reader.pageHighlightedWord() == 180);
 
@@ -907,15 +910,29 @@ namespace {
         ui.invalidate();
         frame(false, 0, 0);
         tap(552, 22); // Leave Page for paused RSVP
-        assert(!reader.pageBrowsing());
+        assert(!reader.pageBrowsing() && reader.session.state.titleInRsvp);
+        assert(reader.session.currentWord == "A");
         screen = screens::Screen::Read;
         frame(false, 0, 0);
         tap(470, 35);
         tap(150, 66); // First chapter
         tap(550, 140);
         assert(screen == screens::Screen::Reader && !reader.pageBrowsing() && !reader.session.playing);
-        assert(reader.session.state.wordIndex == 0);
+        assert(reader.session.state.wordIndex == 0 && reader.session.currentWord == "THE");
+        assert(reader.session.state.titleInRsvp && reader.session.state.titleWord == 0);
+        const auto dictionaryPosition = reader.prepareTitleLookup();
+        assert(dictionaryPosition && reader.pageLookupWordAt(*dictionaryPosition) == "The");
+        assert(ReadingLoop::openChapterTitle(reader.session, 1));
+        std::string rsvpSidecar;
+        assert(!glz::write_toml(reader.session.state, rsvpSidecar));
+        reading::State rsvpBookmark;
+        assert(!glz::read<glz::opts{.format = glz::TOML}>(rsvpBookmark, rsvpSidecar));
+        assert(rsvpBookmark.titleInRsvp && rsvpBookmark.titleWord == 1);
+        ReadingLoop::seekTo(reader.session, rsvpBookmark.wordIndex);
+        assert(ReadingLoop::openChapterTitle(reader.session, *rsvpBookmark.titleWord));
+        assert(reader.session.currentWord == "GARDEN");
 
+        ReadingLoop::seekTo(reader.session, 0);
         reader.session.metadata.chapters = {{"Quiet river", 0}, {"Straße Élan", 18}, {"The woods", 36}};
         reading.pageControlsAutoHide = false;
         reader.openPage();

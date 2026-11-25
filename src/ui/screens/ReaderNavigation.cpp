@@ -29,6 +29,11 @@ std::string folded(std::string text) {
 }
 void ReaderScreen::openPage(bool hideControls) {
     ReadingLoop::pause(session);
+    if (session.state.titleInRsvp) {
+        const auto titleWord = session.state.titleWord;
+        ReadingLoop::leaveChapterTitle(session);
+        session.state.titleWord = titleWord;
+    }
     pageBrowsing_ = true;
     pageChapters_.prepare(session);
     const size_t bookWord = session.state.wordIndex;
@@ -57,15 +62,23 @@ void ReaderScreen::openPage(bool hideControls) {
     pageHasScrolled_ = false;
     pageGesture_ = PageGesture::pending;
 }
-void ReaderScreen::reopenPageAtChapter(uint32_t nowMs) {
-    session.state.titleWord.reset();
-    if (!pageBrowsing_)
-        return;
-
-    openPage(true);
-    // Start the viewport at the chapter instead of following a swipe anchor.
-    browse_.first = browse_.topLine = pageSelected_;
+void ReaderScreen::openSelectedChapter(uint32_t nowMs) {
+    if (pageBrowsing_) {
+        session.state.titleWord = 0;
+        openPage(true);
+        // Avoid the swipe-entry anchor, including chapters without a title.
+        browse_.first = browse_.topLine = pageSelected_;
+    } else if (settings_.mode == settings::ReadingMode::rsvp) {
+        ReadingLoop::openChapterTitle(session, 0);
+    }
     pageProgressChangedAt_ = nowMs;
+}
+
+std::optional<size_t> ReaderScreen::prepareTitleLookup() {
+    if (!session.state.titleInRsvp)
+        return {};
+    pageChapters_.prepare(session);
+    return pageChapters_.headingWord(session.state.wordIndex, *session.state.titleWord);
 }
 ui::Rect ReaderScreen::pageBody() const {
     const int16_t top = pageBarVisible() ? pageHeaderHeight : 0;
@@ -345,8 +358,12 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         const size_t bookWord = pageChapters_.bookWord(pageSelected_);
         if (bookWord != session.state.wordIndex)
             pageProgressChangedAt_ = nowMs;
+        const auto titleWord = pageChapters_.titleWord(pageSelected_);
         commitPlace(bookWord, preferences, nowMs);
         pageBrowsing_ = false;
+        if (titleWord && settings_.mode == settings::ReadingMode::rsvp
+            && ReadingLoop::openChapterTitle(session, *titleWord))
+            pageProgressChangedAt_ = nowMs;
         break;
     }
     case previousLine:

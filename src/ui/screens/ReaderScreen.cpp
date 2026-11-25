@@ -255,7 +255,7 @@ namespace screens {
     }
 
     void ReaderScreen::prefetchNextWord(uint32_t nowMs) {
-        if (settings_.mode == settings::ReadingMode::page || pagePreview_
+        if (settings_.mode == settings::ReadingMode::page || pagePreview_ || session.state.titleInRsvp
             || renderedWordIndex_ != session.state.wordIndex)
             return;
         prefetchUpcomingFont(nowMs);
@@ -381,16 +381,25 @@ namespace screens {
         pagePreview_ = false;
         pageBrowsing_ = false;
         session.lastSavedWordIndex = static_cast<size_t>(-1);
+        session.chapterPlayback = {
+            .enabled = pageAvailable && session.metadata.writingMode == WritingMode::horizontalTb,
+        };
         ReadingLoop::setBookStore(session, store, nowMs);
 
         const uint32_t savedWord = ReadingProgress::restore(session, store);
         if (savedWord != ReadingProgress::kNoSavedWordIndex) {
             const auto titleWord = session.state.titleWord;
+            const bool wasRsvpTitle = session.state.titleInRsvp;
             ReadingLoop::seekTo(session, savedWord);
-            session.state.titleWord = titleWord;
             ReadingProgress::cache(session, preferences, static_cast<uint32_t>(session.state.wordIndex));
-            if (titleWord && pageAvailable && session.metadata.writingMode == WritingMode::horizontalTb)
-                openPage(true);
+            if (titleWord && session.chapterPlayback.enabled) {
+                if (!wasRsvpTitle) {
+                    session.state.titleWord = titleWord;
+                    openPage(true);
+                } else if (settings_.mode == settings::ReadingMode::rsvp) {
+                    ReadingLoop::openChapterTitle(session, *titleWord);
+                }
+            }
         } else {
             preferences.putString("book", session.sourcePath().data());
         }
@@ -472,6 +481,10 @@ namespace screens {
         const bool overlayVisible = !ui.modernReadingPalette() && wpmFeedbackUntilMs_ > nowMs;
 
         const ui::Rect readingArea = ui.paintBounds(readerLayout::readingArea(ui.width(), ui.height(), vertical));
+        const auto rsvpFrame = [&] {
+            const auto signature = frameSignature(session.currentWord, overlayVisible, cjkPacing, settings);
+            return session.state.titleInRsvp ? ui::Context::combine(signature, 1) : signature;
+        };
         if (pageView) {
             const std::string overlay =
                 vertical || !overlayVisible ? "" : std::to_string(settings.wpm) + (cjkPacing ? " CPM" : " WPM");
@@ -482,8 +495,7 @@ namespace screens {
                              overlay);
         } else if (settings.mode == settings::ReadingMode::chunks && chunkLayoutReady_) {
             drawChunk(ui, readingArea);
-        } else if (ui.redraw(readingArea, frameSignature(session.currentWord, overlayVisible, cjkPacing, settings),
-                             true)) {
+        } else if (ui.redraw(readingArea, rsvpFrame(), true)) {
             const std::string overlay =
                 overlayVisible ? std::to_string(settings.wpm) + (cjkPacing ? " CPM" : " WPM") : "";
             background_ = ui.color(ui::themes::ColorRole::Background);
@@ -492,15 +504,23 @@ namespace screens {
                                ui.color(ui::themes::ColorRole::Background));
 
             const std::string& word = session.currentWord;
-            const std::string before = settings.phantomWords ? phantomBefore(session, typography_.fontSizeIndex) : "";
-            const std::string after = settings.phantomWords ? phantomAfter(session, typography_.fontSizeIndex) : "";
-            const bool bidi = session.metadata.requiresBidi(session.state.wordIndex, session.state.wordIndex + 1);
+            const bool titleWord = session.state.titleInRsvp;
+            const bool showPhantoms = settings.phantomWords && !titleWord;
+            const std::string before = showPhantoms ? phantomBefore(session, typography_.fontSizeIndex) : "";
+            const std::string after = showPhantoms ? phantomAfter(session, typography_.fontSizeIndex) : "";
+            const bool bidi = titleWord ? session.chapterPlayback.bidi
+                                        : session.metadata.requiresBidi(session.state.wordIndex, session.state.wordIndex + 1);
             const bool shaping = face_.shaper != nullptr;
             size_t wordOffset = 0;
             bool shaped = false;
             int32_t shapedWidth = 0;
+            std::string_view shapingText = word;
             if (bidi || shaping) {
-                if (session.state.wordIndex < rsvpParagraph_.firstWord
+                if (titleWord) {
+                    rsvpParagraph_ = {};
+                    if (bidi)
+                        (void) rsvpBidi_.reset(word, TextDirection::automatic);
+                } else if (session.state.wordIndex < rsvpParagraph_.firstWord
                     || session.state.wordIndex >= rsvpParagraph_.lastWord) {
                     rsvpParagraph_ = ReadingLoop::paragraphAt(session, session.state.wordIndex);
                     rsvpBidi_.clear();
@@ -511,8 +531,11 @@ namespace screens {
                             ESP_LOGW("reader", "bidi analysis failed: %s", analyzed.error().c_str());
                     }
                 }
-                const size_t localWord = session.state.wordIndex - rsvpParagraph_.firstWord;
-                wordOffset = rsvpParagraph_.wordOffsets[localWord];
+                if (!titleWord) {
+                    const size_t localWord = session.state.wordIndex - rsvpParagraph_.firstWord;
+                    wordOffset = rsvpParagraph_.wordOffsets[localWord];
+                    shapingText = rsvpParagraph_.text;
+                }
 
                 rsvpLine_.clear();
                 if (bidi) {
@@ -532,7 +555,7 @@ namespace screens {
                 if (shaping) {
                     const std::string_view locale = session.localeAt(session.state.wordIndex);
                     if (!bidi) {
-                        const auto result = face_.shaper->shape(rsvpParagraph_.text, wordOffset, word.size(), false,
+                        const auto result = face_.shaper->shape(shapingText, wordOffset, word.size(), false,
                                                                 locale, text_, rsvpGlyphs_);
                         shaped = result.has_value();
                         if (result)
@@ -542,7 +565,7 @@ namespace screens {
                     } else {
                         shaped = true;
                         for (const BidiText::Run& run: rsvpLine_) {
-                            const auto result = face_.shaper->shape(rsvpParagraph_.text, run.offset, run.length,
+                            const auto result = face_.shaper->shape(shapingText, run.offset, run.length,
                                                                     run.rightToLeft, locale, text_, rsvpGlyphs_);
                             if (!result) {
                                 ESP_LOGW("reader", "shaping failed: %s", result.error().c_str());
@@ -556,7 +579,7 @@ namespace screens {
                         rsvpGlyphs_.clear();
                 }
                 if (!shaped)
-                    BidiText::visualCodepoints(rsvpParagraph_.text, rsvpLine_, rsvpVisual_);
+                    BidiText::visualCodepoints(shapingText, rsvpLine_, rsvpVisual_);
             }
             const int focus = focusOffset(word);
             uint32_t shapedFocusCluster = UINT32_MAX;
@@ -644,7 +667,7 @@ namespace screens {
                                 const auto& glyph = rsvpGlyphs_[index];
                                 cursor = static_cast<int16_t>(cursor
                                                               + text_.drawVerticalGlyph(glyph,
-                                                                                        codepointAt(rsvpParagraph_.text,
+                                                                                        codepointAt(shapingText,
                                                                                                     glyph.cluster),
                                                                                         cursor, centerY));
                             }

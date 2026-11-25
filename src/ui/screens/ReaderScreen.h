@@ -17,6 +17,7 @@
 #include "text/BidiText.h"
 #include "ui/Ui.h"
 #include "ui/screens/PageReaderScreen.h"
+#include "ui/screens/PageChapterText.h"
 #include "ui/screens/Screens.h"
 
 namespace screens {
@@ -37,7 +38,7 @@ namespace screens {
         bool openBook(ui::Context& ui, StorageManager& storage, Preferences& preferences, size_t index, uint32_t nowMs);
         void closeBook();
         void prepareBookOpen(Preferences& preferences, uint32_t nowMs);
-        void finishBookOpen(Preferences& preferences, uint32_t nowMs);
+        void finishBookOpen(Preferences& preferences, uint32_t nowMs, bool pageAvailable);
         void loadInitialBook(ui::Context& ui, StorageManager& storage, Preferences& preferences, uint32_t nowMs);
         void draw(ui::Context& ui, const StorageManager& storage, const Board::Power::BatteryState& battery,
                   uint32_t nowMs);
@@ -58,7 +59,12 @@ namespace screens {
         void reopenPageAtChapter(uint32_t nowMs);
         void syncPagePosition(uint32_t nowMs);
         void drawPage(ui::Context& ui, uint32_t nowMs);
-        size_t pageHighlightedWord() const { return browse_.highlighted; }
+        size_t pageSelectedPosition() const { return browse_.highlighted; }
+        size_t pageWordCount() const { return pageChapters_.count(); }
+        std::string_view pageLookupWordAt(size_t position) const { return pageChapters_.lookupWordAt(session, position); }
+        size_t pageHighlightedWord() const {
+            return browse_.highlighted == SIZE_MAX ? SIZE_MAX : pageChapters_.bookWord(browse_.highlighted);
+        }
         bool revealPageControls();
         void hidePageControls();
         void openLocator(Screen& screen);
@@ -84,6 +90,7 @@ namespace screens {
         ui::Rect pageBody() const;
         bool pageBarVisible() const { return !pageBarHidden_; }
         PageReader::BrowseState browse_;
+        PageReader::ChapterText pageChapters_;
         struct PageViewport {
             size_t first, topLine, selected;
             int offset, minimumOffset, scrollRemainder;

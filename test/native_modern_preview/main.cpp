@@ -3,6 +3,7 @@
 #include <canvas/Arduino_Canvas.h>
 #include <cstdio>
 #include <filesystem>
+#include <glaze/toml.hpp>
 #include <cassert>
 #include "ui/screens/ModernScreens.h"
 #include "ui/screens/LibraryScreen.h"
@@ -23,7 +24,7 @@
 extern int previewSaveCalls, previewPrefetchDelay, previewPageMirrors;
 #include <freertos/task.h>
 extern size_t previewRuntimeSize;
-namespace dictionary { extern std::string previewCase; extern size_t previewLookupWord; }
+namespace dictionary { extern std::string previewCase; extern size_t previewLookupWord; extern std::string previewLookupText; }
 
 namespace {
     ui::TouchContact contact;
@@ -327,7 +328,6 @@ namespace {
             words.insert(words.end(), paragraph.begin(), paragraph.end());
         }
         ReadingLoop::setWords(reader.session, words, 0);
-        reader.session.metadata.chapters = {{"The garden", 0}, {"A quiet path", 180}};
     }
 
     void writePageFrame(Arduino_Canvas& panel, FILE* output) {
@@ -358,7 +358,8 @@ namespace {
             if (screen == screens::Screen::Reader) {
                 reader.handleModernControls(ui, now, preferences, settings, screen);
                 if (screen == screens::Screen::Dictionary)
-                    dictionary.open(reader.session, reader.pageHighlightedWord(), screens::Screen::Reader);
+                    dictionary.open(reader.session, reader.pageSelectedPosition(), screens::Screen::Reader,
+                                    [&](size_t word) { return reader.pageLookupWordAt(word); }, reader.pageWordCount());
             }
             ui.beginFrame(static_cast<uint8_t>(screen),screen==screens::Screen::Reader && reader.pageBrowsing());
             if(screen==screens::Screen::Reader) {
@@ -879,6 +880,7 @@ namespace {
                 }
             }
         }
+        reader.session.metadata.chapters = {{"The garden", 0}, {"A quiet path", 180}};
         ReadingLoop::seekTo(reader.session, 0);
         reader.openPage();
         frame(false, 0, 0);
@@ -913,6 +915,96 @@ namespace {
         tap(550, 140);
         assert(screen == screens::Screen::Reader && !reader.pageBrowsing() && !reader.session.playing);
         assert(reader.session.state.wordIndex == 0);
+
+        reader.session.metadata.chapters = {{"Quiet river", 0}, {"Straße Élan", 18}, {"The woods", 36}};
+        reading.pageControlsAutoHide = false;
+        reader.openPage();
+        ui.invalidate();
+        frame(false, 0, 0);
+        assert(reader.pageLookupWordAt(reader.pageSelectedPosition()) == "She");
+        const auto scrub = [&](int delta) {
+            frame(true, 200, 100);
+            frame(true, 200 + delta, 100);
+            frame(false, 200 + delta, 100);
+            frame(false, 0, 0);
+        };
+        scrub(-11);
+        assert(reader.pageLookupWordAt(reader.pageSelectedPosition()) == "river");
+        assert(reader.session.state.wordIndex == 0 && reader.session.state.titleWord == 1);
+        tap(400, 20);
+        assert(screen == screens::Screen::Dictionary && dictionary::previewLookupText == "river");
+        tap(42, 22);
+        assert(screen == screens::Screen::Reader && reader.pageLookupWordAt(reader.pageSelectedPosition()) == "river");
+
+        // Round-trip the real sidecar schema, including a legacy state with
+        // no chapter-title field, then rebuild the Page from its bookmark.
+        std::string sidecar;
+        const reading::StoredState saved{.identity = {1000, 1234, 450}, .reading = reader.session.state};
+        assert(!glz::write_toml(saved, sidecar));
+        reading::StoredState restoredBookmark;
+        assert(!glz::read<glz::opts{.format = glz::TOML}>(restoredBookmark, sidecar));
+        assert(restoredBookmark == saved);
+        reading::State legacy;
+        assert(!glz::read<glz::opts{.format = glz::TOML}>(legacy, std::string{"wordIndex = 18\n"}));
+        assert(legacy.wordIndex == 18 && !legacy.titleWord);
+        reader.session.state = restoredBookmark.reading;
+        reader.openPage(true);
+        ui.invalidate();
+        frame(false, 0, 0);
+        assert(reader.pageLookupWordAt(reader.pageSelectedPosition()) == "river");
+        scrub(11);
+        assert(reader.pageLookupWordAt(reader.pageSelectedPosition()) == "She");
+        assert(!reader.session.state.titleWord);
+
+        // Use the production layout around a chapter break and compare the
+        // incremental framebuffer with a fresh paint in both directions.
+        screens::PageReader::ChapterText chapterText;
+        chapterText.prepare(reader.session);
+        const auto secondTitle = chapterText.headingWord(18, 0);
+        const auto secondWord = chapterText.headingWord(18, 1);
+        assert(secondTitle && secondWord);
+        assert(chapterText.wordAt(reader.session, *secondTitle) == "STRASSE");
+        assert(chapterText.wordAt(reader.session, *secondWord) == "ÉLAN");
+        assert(chapterText.bookWord(*secondWord) == 18 && chapterText.titleWord(*secondWord) == 1);
+
+        ui::fonts::AlphaTextRenderer<640> titleText(panel);
+        assert(titleText.begin());
+        const auto typeface = [&](size_t) {
+            return reader.fonts.loadFace(0, RFont4::sizeIndexForId("compact"));
+        };
+        for (const uint8_t scale : {100, 64}) {
+            using namespace screens::PageReader;
+            BrowseState probe;
+            const auto paint = [&] {
+                ui.beginFrame(42, true);
+                browse(probe, ui, titleText, typeface, reading.typography, 0, reader.session, {0, 0, 580, 172},
+                       SIZE_MAX, scale, false, HighlightMode::departingScrollLine, false, &chapterText);
+                ui.endFrame();
+            };
+            ui.invalidate();
+            paint();
+            const auto lines = std::span(probe.layout.lines).first(probe.layout.lineCount);
+            const auto title = std::ranges::find(lines, *secondTitle, &State::Line::start);
+            assert(title != lines.end() && title > lines.begin() && title + 1 != lines.end());
+            assert(title->end == chapterText.pageWord(18));
+            const auto before = title - 1;
+            const auto after = title + 1;
+            assert(title->flowTop - before->flowTop > before->bottom - before->flowTop + 2);
+            assert(after->flowTop - title->flowTop > title->bottom - title->flowTop + 2);
+            for (const int step : {1, -1}) {
+                for (int i = 0; i < 100; ++i) {
+                    probe.scrollBy(step);
+                    paint();
+                    const auto position = probe.highlighted;
+                    const std::vector<uint16_t> cached(panel.getFramebuffer(), panel.getFramebuffer() + 640 * 172);
+                    probe.rowCache.valid = false;
+                    ui.invalidate();
+                    paint();
+                    assert(probe.highlighted == position);
+                    assert(std::equal(cached.begin(), cached.end(), panel.getFramebuffer()));
+                }
+            }
+        }
         assert(committed>0);std::puts("Page, locator and search: simple header, mode preserved, chrome fully restored, direct drag, explicit jump, previous place, keyboard, results preview and cancel verified.");
     }
 

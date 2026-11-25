@@ -27,6 +27,9 @@ void pageLabels(ui::Context& ui,const TextPage& p,int x,int y,int width){
     for(size_t i=0;i<4;++i)ui.label({int16_t(x),int16_t(y+int(i)*21),int16_t(width),21},p.lines[i],15);
 }
 }
+std::string_view Dictionary::wordAt(const ReadingSession& session, size_t index) const {
+    return pageWordAt_ ? pageWordAt_(index) : ReadingLoop::wordAt(session, index);
+}
 screens::Action Dictionary::draw(ui::Context& ui,ReadingSession& session,screens::Screen& screen,uint32_t) {
     using screens::Action;using screens::Screen;using ui::modern::button;using ui::modern::Style;
     if(screen==Screen::DictionarySearch){
@@ -47,8 +50,15 @@ screens::Action Dictionary::draw(ui::Context& ui,ReadingSession& session,screens
         ui::modern::rule(ui,{0,43,640,1});
         ui.label({16,51,190,35},query_.empty()?"Choose a word":query_,20);
         ui.label({16,91,190,24},definition_.senses.empty()?"Offline first":"Meaning "+std::to_string(sense_+1)+" · page "+std::to_string(definitionOffsets_.size()),12,ui::themes::Muted);
-        if(button(ui,{16,120,88,44},"‹ Word",Style::Secondary,lookupWord_>0,{},12)){--lookupWord_;query_=std::string(ReadingLoop::wordAt(session,lookupWord_));lookup();}
-        if(button(ui,{114,120,92,44},"Word ›",Style::Secondary,lookupWord_+1<ReadingLoop::wordCount(session),{},12)){++lookupWord_;query_=std::string(ReadingLoop::wordAt(session,lookupWord_));lookup();}
+        const auto count = pageWordAt_ ? pageWordCount_ : ReadingLoop::wordCount(session);
+        if (button(ui, {16,120,88,44}, "‹ Word", Style::Secondary, lookupWord_ > 0, {}, 12)) {
+            query_ = std::string(wordAt(session, --lookupWord_));
+            lookup();
+        }
+        if (button(ui, {114,120,92,44}, "Word ›", Style::Secondary, lookupWord_ + 1 < count, {}, 12)) {
+            query_ = std::string(wordAt(session, ++lookupWord_));
+            lookup();
+        }
         if(definition_.senses.empty())ui.label({226,54,398,104},message,16,ui::themes::Muted,ui::TextAlign::Start,4);
         else{
             sense_=std::min(sense_,definition_.senses.size()-1);const auto& sense=definition_.senses[sense_];

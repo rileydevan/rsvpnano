@@ -116,7 +116,9 @@ void App::begin() {
     // Leave the last real status (including failures) visible until the usual
     // transition. Do not introduce a second splash delay or fake a Ready state.
     if(modernStartup){
-        statusDestination_=settingsStore_.settings().interface.onboardingComplete?screens::Screen::Read:screens::Screen::Onboarding;
+        statusDestination_ = settingsStore_.settings().interface.onboardingComplete
+            ? (readerScreen_.pageBrowsing() ? screens::Screen::Reader : screens::Screen::Read)
+            : screens::Screen::Onboarding;
         if(!settingsStore_.settings().interface.onboardingComplete)onboardingScreen_.begin(immediateUi_,settingsStore_.settings(),millis());
         if(settingsStore_.settings().reading.mode==settings::ReadingMode::page){
             settingsStore_.settings().reading.mode=settings::ReadingMode::rsvp;settingsStore_.acceptChanges();
@@ -850,8 +852,12 @@ void App::handleInput(Input::ActionMask actions, uint32_t nowMs) {
 
 void App::openDictionary(uint32_t nowMs, std::optional<size_t> pageWord) {
     readerScreen_.pauseImmediately(prefs_, nowMs);
-    dictionary_.open(readerScreen_.session, pageWord,
-                     pageWord ? screens::Screen::Reader : screens::Screen::QuickControls);
+    if (pageWord) {
+        dictionary_.open(readerScreen_.session, pageWord, screens::Screen::Reader,
+                         [this](size_t word) { return readerScreen_.pageLookupWordAt(word); }, readerScreen_.pageWordCount());
+    } else {
+        dictionary_.open(readerScreen_.session);
+    }
     screen_ = screens::Screen::Dictionary;
     renderScreen(nowMs);
 }
@@ -873,7 +879,7 @@ void App::handleTouch(uint32_t nowMs) {
         if (!readerScreen_.handleModernControls(immediateUi_, nowMs, prefs_, settingsStore_, screen_))
             readerScreen_.handleTouch(immediateUi_, nowMs, prefs_, settingsStore_);
         else if (screen_ == screens::Screen::Dictionary)
-            openDictionary(nowMs, readerScreen_.pageHighlightedWord());
+            openDictionary(nowMs, readerScreen_.pageSelectedPosition());
     } else {
         renderScreen(nowMs);
     }
@@ -992,7 +998,7 @@ void App::updateBackgroundJob() {
                 storage_.book(jobBookLoaded_ && loadedIndex >= 0 ? static_cast<size_t>(loadedIndex) : jobBookIndex_);
             const std::string_view bookName = book == nullptr ? std::string_view{} : BookLibrary::displayName(*book);
             if (jobBookLoaded_) {
-                readerScreen_.finishBookOpen(prefs_, millis());
+                readerScreen_.finishBookOpen(prefs_, millis(), immediateUi_.width() == 640 && immediateUi_.height() == 172);
                 ReadingLoop::pause(readerScreen_.session);
                 typographyOpensBook_ = true;
                 screens::status(immediateUi_, immediateUi_.text(UiText::OpeningBook), bookName, {}, 85);

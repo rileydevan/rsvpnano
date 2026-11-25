@@ -928,6 +928,7 @@ namespace ReadingLoop {
     }
 
     void start(ReadingSession& session, uint32_t nowMs) {
+        session.state.titleWord.reset();
         session.lastAdvanceMs = nowMs;
         session.playing = true;
     }
@@ -1024,6 +1025,7 @@ namespace ReadingLoop {
     }
 
     void seekTo(ReadingSession& session, size_t wordIndex) {
+        session.state.titleWord.reset();
         const size_t count = wordCount(session);
         if (count == 0) {
             session.currentWord.clear();

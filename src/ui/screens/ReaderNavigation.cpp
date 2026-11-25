@@ -29,9 +29,18 @@ std::string folded(std::string text) {
 }
 void ReaderScreen::openPage(bool hideControls) {
     ReadingLoop::pause(session);
-    pageBrowsing_=true;pageSelected_=session.state.wordIndex;
+    pageBrowsing_ = true;
+    pageChapters_.prepare(session);
+    const size_t bookWord = session.state.wordIndex;
+    const auto savedTitle = session.state.titleWord
+        ? pageChapters_.headingWord(bookWord, *session.state.titleWord) : std::nullopt;
+    if (!savedTitle)
+        session.state.titleWord.reset();
+    pageSelected_ = savedTitle.value_or(pageChapters_.pageWord(bookWord));
     PageReader::BrowseState nextPage;
-    nextPage.first = pageSelected_;
+    nextPage.first = savedTitle ? pageSelected_ : pageChapters_.headingWord(bookWord, 0).value_or(pageSelected_);
+    if (savedTitle)
+        nextPage.topLine = pageSelected_;
     nextPage.viewportCanvas = std::move(browse_.viewportCanvas);
     nextPage.scaleCanvas = std::move(browse_.scaleCanvas);
     browse_ = std::move(nextPage);
@@ -49,12 +58,13 @@ void ReaderScreen::openPage(bool hideControls) {
     pageGesture_ = PageGesture::pending;
 }
 void ReaderScreen::reopenPageAtChapter(uint32_t nowMs) {
+    session.state.titleWord.reset();
     if (!pageBrowsing_)
         return;
 
     openPage(true);
     // Start the viewport at the chapter instead of following a swipe anchor.
-    browse_.topLine = pageSelected_;
+    browse_.first = browse_.topLine = pageSelected_;
     pageProgressChangedAt_ = nowMs;
 }
 ui::Rect ReaderScreen::pageBody() const {
@@ -99,7 +109,7 @@ void ReaderScreen::hidePageControls() {
 void ReaderScreen::openLocator(Screen& screen) {
     ReadingLoop::pause(session);
     locatorOrigin_=session.state.wordIndex;
-    candidate_=pageBrowsing_?pageSelected_:session.state.wordIndex;
+    candidate_=pageBrowsing_?pageChapters_.bookWord(pageSelected_):session.state.wordIndex;
     screen=Screen::FindPlace;
 }
 void ReaderScreen::commitPlace(size_t index,Preferences& preferences,uint32_t nowMs) {
@@ -108,14 +118,18 @@ void ReaderScreen::commitPlace(size_t index,Preferences& preferences,uint32_t no
     pageSelected_=session.state.wordIndex;
 }
 void ReaderScreen::syncPagePosition(uint32_t nowMs) {
-    if (!pageBrowsing_ || browse_.highlighted == SIZE_MAX
-        || pageSelected_ == session.state.wordIndex)
+    if (!pageBrowsing_ || browse_.highlighted == SIZE_MAX)
+        return;
+    const size_t bookWord = pageChapters_.bookWord(pageSelected_);
+    const auto titleWord = pageChapters_.titleWord(pageSelected_);
+    if (bookWord == session.state.wordIndex && titleWord == session.state.titleWord)
         return;
     if (!pageHasScrolled_) {
         returnWord_ = session.state.wordIndex;
         pageHasScrolled_ = true;
     }
-    ReadingLoop::seekTo(session, pageSelected_);
+    ReadingLoop::seekTo(session, bookWord);
+    session.state.titleWord = titleWord;
     pageProgressChangedAt_ = nowMs;
 }
 void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
@@ -143,8 +157,11 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
     const bool follow = enteringSwipe || (!keepSelection && ((pageGesture_ == PageGesture::horizontal && pageScrubMoved_)
                      || pageScrubFinished_));
     const auto area = pageViewportDeferred_ ? browse_.displayArea : pageBody();
-    PageReader::browse(browse_, ui, text_, [&](size_t index) { return pageTypeface(index, builtInPageSize); },
-                       typography_, revision, session, area, selected, scale, follow, highlightMode, size <= 2 || enteringSwipe);
+    const auto* chapters = pageChapters_.empty() ? nullptr : &pageChapters_;
+    PageReader::browse(browse_, ui, text_, [&](size_t index) {
+                           return pageTypeface(chapters ? chapters->bookWord(index) : index, builtInPageSize);
+                       }, typography_, revision, session, area, selected, scale, follow, highlightMode,
+                       size <= 2 || enteringSwipe, chapters);
     const bool gestureFinished = pageScrollFinished_ || pageScrubFinished_;
     pageScrubFinished_ = false;
     if (verticalScroll && browse_.highlighted != selected)
@@ -162,7 +179,9 @@ void ReaderScreen::drawPage(ui::Context& ui, uint32_t nowMs) {
     };
     drawButton(previousLine);
     drawButton(nextLine);
-    ui.label({584,148,52,24},std::to_string(ReadingProgress::percent(browse_.topLine == SIZE_MAX ? browse_.first : browse_.topLine, ReadingLoop::wordCount(session)))+"%",11,ui::themes::Muted,ui::TextAlign::Center);
+    const size_t top = browse_.topLine == SIZE_MAX ? browse_.first : browse_.topLine;
+    ui.label({584,148,52,24},std::to_string(ReadingProgress::percent(pageChapters_.bookWord(top),
+             ReadingLoop::wordCount(session)))+"%",11,ui::themes::Muted,ui::TextAlign::Center);
     // Keep the toolbar last so its slots can clear without redrawing the text.
     if (pageBarVisible()) {
         for (size_t i = menu; i < previousLine; ++i)
@@ -322,12 +341,14 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
         }
         break;
     case findPlace: openLocator(screen); break;
-    case backToBook:
-        if (pageSelected_ != session.state.wordIndex)
+    case backToBook: {
+        const size_t bookWord = pageChapters_.bookWord(pageSelected_);
+        if (bookWord != session.state.wordIndex)
             pageProgressChangedAt_ = nowMs;
-        commitPlace(pageSelected_, preferences, nowMs);
+        commitPlace(bookWord, preferences, nowMs);
         pageBrowsing_ = false;
         break;
+    }
     case previousLine:
     case nextLine: {
         const bool down = control == nextLine;
@@ -349,6 +370,8 @@ bool ReaderScreen::handlePage(ui::Context& ui, uint32_t nowMs, Preferences& pref
             pageVerticalHighlight_ = false;
             pageSelected_ = word;
             pageSelectionPinned_ = true;
+            if (pageChapters_.titleWord(word) || session.state.titleWord)
+                syncPagePosition(nowMs);
         }
         break;
     }

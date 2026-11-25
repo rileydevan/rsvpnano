@@ -157,6 +157,7 @@ namespace ReadingProgress {
             .and_then([&](reading::StoredState state) {
                 state.identity = identity;
                 state.reading.wordIndex = std::min(wordIndex, identity.wordCount - 1);
+                state.reading.titleWord.reset();
                 return writeBookState(bookPath, std::move(state));
             })
             .transform([&] {

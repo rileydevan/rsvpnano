@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "settings/SettingsModel.h"
 
@@ -17,6 +18,8 @@ namespace reading {
     struct State {
         uint32_t wordIndex = 0;
         settings::ReadingOverrides overrides;
+        // When set, wordIndex anchors the chapter's first body word.
+        std::optional<uint32_t> titleWord;
 
         bool operator==(const State&) const = default;
     };

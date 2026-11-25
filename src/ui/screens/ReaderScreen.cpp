@@ -350,7 +350,7 @@ namespace screens {
             status(ui, ui.text(UiText::BookFailed), BookLibrary::displayName(book), ui.text(UiText::CheckSdCard));
             return false;
         }
-        finishBookOpen(preferences, nowMs);
+        finishBookOpen(preferences, nowMs, ui.width() == 640 && ui.height() == 172);
         refreshTypography();
         return true;
     }
@@ -375,7 +375,7 @@ namespace screens {
         session.metadata.clear();
     }
 
-    void ReaderScreen::finishBookOpen(Preferences& preferences, uint32_t nowMs) {
+    void ReaderScreen::finishBookOpen(Preferences& preferences, uint32_t nowMs, bool pageAvailable) {
         returnWord_ = SIZE_MAX; browse_ = {}; searchResults_.clear(); searchQuery_.clear(); searchDraft_.clear(); searchRunning_ = false;
         session.state = {};
         pagePreview_ = false;
@@ -385,8 +385,12 @@ namespace screens {
 
         const uint32_t savedWord = ReadingProgress::restore(session, store);
         if (savedWord != ReadingProgress::kNoSavedWordIndex) {
+            const auto titleWord = session.state.titleWord;
             ReadingLoop::seekTo(session, savedWord);
+            session.state.titleWord = titleWord;
             ReadingProgress::cache(session, preferences, static_cast<uint32_t>(session.state.wordIndex));
+            if (titleWord && pageAvailable && session.metadata.writingMode == WritingMode::horizontalTb)
+                openPage(true);
         } else {
             preferences.putString("book", session.sourcePath().data());
         }

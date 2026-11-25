@@ -1,4 +1,5 @@
 #include "ui/screens/PageReaderScreen.h"
+#include "ui/screens/PageChapterText.h"
 #include "ui/ClippedGfx.h"
 
 #include <algorithm>
@@ -56,6 +57,10 @@ namespace screens::PageReader {
             return anchor - paragraph <= kParagraphSnapWords ? paragraph : anchor;
         }
 
+        std::string_view pageWordAt(const State& state, const ReadingSession& session, size_t index) {
+            return state.chapterText ? state.chapterText->wordAt(session, index) : ReadingLoop::wordAt(session, index);
+        }
+
         void activateFace(ui::fonts::AlphaTextRenderer<640>& text, const FontCatalog::Face& face) {
             text.setFont(face.raster.get());
         }
@@ -87,12 +92,12 @@ namespace screens::PageReader {
             if (localIndex < state.words.size())
                 return state.words[localIndex];
 
-            const std::string_view word = ReadingLoop::wordAt(session, index);
+            const std::string_view word = pageWordAt(state, session, index);
             State::Word prepared{.faceIndex = faceIndex, .cjk = UnicodeText::isCjkText(word)};
             if (face.shaper) {
                 const size_t paragraphWord = index - paragraph.firstWord;
                 const size_t offset = paragraph.wordOffsets[paragraphWord];
-                const std::string_view locale = session.localeAt(index);
+                const std::string_view locale = session.localeAt(state.chapterText ? state.chapterText->bookWord(index) : index);
                 const size_t glyphStart = state.glyphs.size();
                 if (glyphStart > UINT16_MAX) {
                     prepared.width = text.textAdvance(word, typography.tracking);
@@ -188,7 +193,7 @@ namespace screens::PageReader {
                 const size_t localEnd = line.end - paragraph.firstWord;
                 const size_t offset = paragraph.wordOffsets[localStart];
                 const size_t end =
-                    paragraph.wordOffsets[localEnd - 1] + ReadingLoop::wordAt(session, line.end - 1).size();
+                    paragraph.wordOffsets[localEnd - 1] + pageWordAt(state, session, line.end - 1).size();
                 const BidiText::LineRange range{offset, end - offset};
                 line.characterStart = state.characters.size();
                 line.bidi = true;
@@ -201,7 +206,7 @@ namespace screens::PageReader {
                     const auto next = std::ranges::upper_bound(paragraph.wordOffsets, codepoint.offset);
                     const size_t localWord = static_cast<size_t>(next - paragraph.wordOffsets.begin() - 1);
                     const size_t logicalWord = paragraph.firstWord + localWord;
-                    const std::string_view word = ReadingLoop::wordAt(session, logicalWord);
+                    const std::string_view word = pageWordAt(state, session, logicalWord);
                     const bool belongsToWord = codepoint.offset < paragraph.wordOffsets[localWord] + word.size();
                     state.characters.push_back({
                         .codepoint = codepoint.value,
@@ -220,7 +225,11 @@ namespace screens::PageReader {
         void layout(State& state, ui::fonts::AlphaTextRenderer<640>& text, const Typeface& typeface,
                     const settings::TypographySettings& typography, const ReadingSession& session, ui::Rect area,
                     size_t start, bool measureInk = true, bool spaceParagraphs = true) {
-            const size_t wordCount = ReadingLoop::wordCount(session);
+            const auto* chapters = state.chapterText;
+            const size_t wordCount = chapters ? chapters->count() : ReadingLoop::wordCount(session);
+            const auto paragraphAt = [&](size_t index) {
+                return chapters ? chapters->paragraphAt(session, index) : ReadingLoop::paragraphAt(session, index);
+            };
             size_t index = std::min(start, wordCount);
             clearPage(state);
             state.vertical = false;
@@ -233,6 +242,7 @@ namespace screens::PageReader {
             ReadingLoop::TextParagraph shapingParagraph;
             BidiText::Analysis shapingBidi;
             bool paragraphBidi = false;
+            bool heading = false;
             bool shapingBidiReady = true;
             BidiText::Line shapingBidiLine;
             std::vector<BidiText::Codepoint> visual;
@@ -240,28 +250,33 @@ namespace screens::PageReader {
             state.characters.clear();
 
             while (index < wordCount && state.lineCount < state.lines.size()) {
+                bool besideHeading = false;
                 if (index < paragraphRange.first || index >= paragraphRange.second) {
                     if (paragraphBidi && shapingParagraph.lastWord > shapingParagraph.firstWord)
                         appendBidiParagraph(state, session, shapingParagraph, shapingBidi, shapingBidiReady,
                                             bidiFirstLine, state.lineCount, shapingBidiLine, visual);
-                    paragraphRange = ReadingLoop::paragraphBoundsAt(session, index);
+                    paragraphRange = chapters ? chapters->paragraphBounds(session, index)
+                                              : ReadingLoop::paragraphBoundsAt(session, index);
+                    const bool previousHeading = heading;
+                    heading = chapters && chapters->heading(index);
+                    besideHeading = heading || previousHeading;
                     bidiFirstLine = state.lineCount;
-                    paragraphBidi = session.metadata.requiresBidi(paragraphRange.first, paragraphRange.second);
+                    const size_t first = chapters ? chapters->bookWord(paragraphRange.first) : paragraphRange.first;
+                    const size_t end = chapters ? chapters->bookWord(paragraphRange.second) : paragraphRange.second;
+                    paragraphBidi = heading ? chapters->headingBidi(index) : session.metadata.requiresBidi(first, end);
                     shapingParagraph = {};
                     if (paragraphBidi) {
-                        shapingParagraph = ReadingLoop::paragraphAt(session, index);
-                        shapingBidiReady =
-                            shapingBidi
-                                .reset(shapingParagraph.text, session.metadata.directionAt(shapingParagraph.firstWord))
-                                .has_value();
+                        shapingParagraph = paragraphAt(index);
+                        const auto direction = heading ? TextDirection::automatic : session.metadata.directionAt(first);
+                        shapingBidiReady = shapingBidi.reset(shapingParagraph.text, direction).has_value();
                     }
                 }
                 const bool startsParagraph = index == paragraphRange.first;
-                if (spaceParagraphs && state.lineCount > 0 && startsParagraph)
+                if (state.lineCount > 0 && (besideHeading || (spaceParagraphs && startsParagraph)))
                     top = static_cast<int16_t>(top + std::max<int16_t>(4, previousLineHeight / 3));
 
                 State::Line& line = state.lines[state.lineCount];
-                line = {.start = index, .flowTop = top, .top = top, .paragraphStart = startsParagraph};
+                line = {.start = index, .flowTop = top, .top = top, .paragraphStart = startsParagraph && !heading};
                 int16_t width = 0;
                 uint8_t ascent = 0;
                 uint8_t descent = 0;
@@ -271,7 +286,7 @@ namespace screens::PageReader {
                     // Ordinary text needs wrap metrics, not the paragraph's
                     // full text. Avoid rereading it from SD on each rebase.
                     if (face.shaper && shapingParagraph.wordOffsets.empty())
-                        shapingParagraph = ReadingLoop::paragraphAt(session, index);
+                        shapingParagraph = paragraphAt(index);
                     const uint8_t faceIndex = rememberFace(state, face);
                     const ui::fonts::AlphaFont& font = face.raster.get();
                     activateFace(text, face);
@@ -280,7 +295,7 @@ namespace screens::PageReader {
                                     shapingBidi, paragraphBidi, shapingBidiReady, shapingBidiLine);
                     const int16_t spaceWidth = std::max<int16_t>(1, text.glyphAdvance(' '));
                     const bool joinsCjk = index > line.start && prepared.cjk && wordAt(state, index - 1).cjk;
-                    const int16_t gap = index == line.start ? startsParagraph ? spaceWidth * 2 : 0
+                    const int16_t gap = index == line.start ? line.paragraphStart ? spaceWidth * 2 : 0
                                       : joinsCjk            ? 0
                                                             : spaceWidth;
                     prepared.x = static_cast<int16_t>(area.x + kMarginX + width + gap);
@@ -434,7 +449,7 @@ namespace screens::PageReader {
                 return;
             }
             text.setTextColor(ui.color(role), ui.color(ui::themes::ColorRole::Background));
-            text.drawString(ReadingLoop::wordAt(session, index), x, baseline, typography.tracking);
+            text.drawString(pageWordAt(state, session, index), x, baseline, typography.tracking);
         }
 
         int16_t lineAdvance(State& state, const State::Line& line, ui::fonts::AlphaTextRenderer<640>& text,
@@ -524,7 +539,7 @@ namespace screens::PageReader {
                                 text.measure(std::span{state.glyphs}.subspan(word.glyphStart, word.glyphCount), word.x,
                                              word.y, bounds);
                         else
-                            word.inkKnown = text.measure(ReadingLoop::wordAt(session, index), word.x, word.y, bounds,
+                            word.inkKnown = text.measure(pageWordAt(state, session, index), word.x, word.y, bounds,
                                                          typography.tracking);
                         word.ink = inkRect(bounds);
                     }
@@ -1102,9 +1117,11 @@ namespace screens::PageReader {
 
     void browse(BrowseState& browse, ui::Context& ui, ui::fonts::AlphaTextRenderer<640>& text, const Typeface& typeface,
                 const settings::TypographySettings& typography, uint32_t revision,
-                const ReadingSession& session, ui::Rect area, size_t selected, uint8_t scale, bool followSelection, HighlightMode highlightMode, bool anchorSecondLine) {
-        auto& state=browse.layout;
-        if (ReadingLoop::wordCount(session) == 0) {
+                const ReadingSession& session, ui::Rect area, size_t selected, uint8_t scale, bool followSelection,
+                HighlightMode highlightMode, bool anchorSecondLine, const ChapterText* chapters) {
+        auto& state = browse.layout;
+        const size_t wordCount = chapters ? chapters->count() : ReadingLoop::wordCount(session);
+        if (wordCount == 0) {
             browse.highlighted = kInvalidIndex;
             ui.redraw(area, 0);
             return;
@@ -1123,9 +1140,9 @@ namespace screens::PageReader {
             : ui::Rect{0, 0, logicalExtent(area.w, scale), logicalExtent(area.h, scale)};
         const auto previousArea = browse.displayArea;
         browse.displayArea = area;
-        const size_t wordCount = ReadingLoop::wordCount(session);
         const bool wrapChanged = browse.scale != scale || state.layoutRevision != revision
-                              || state.layoutArea.w != logicalArea.w;
+                              || state.layoutArea.w != logicalArea.w || state.chapterText != chapters;
+        state.chapterText = chapters;
         if (wrapChanged) {
             if (browse.topLine != kInvalidIndex)
                 browse.first = browse.topLine;
@@ -1173,7 +1190,8 @@ namespace screens::PageReader {
         const auto wrapToWord = [&](size_t target) {
             // Recover the real line breaks from the paragraph start. Cache
             // earlier rows as we go so a reverse drag can reuse their layout.
-            browse.first = ReadingLoop::paragraphBoundsAt(session, target).first;
+            browse.first = chapters ? chapters->paragraphBounds(session, target).first
+                                   : ReadingLoop::paragraphBoundsAt(session, target).first;
             if (browse.first == target) {
                 rebuild();
                 return;

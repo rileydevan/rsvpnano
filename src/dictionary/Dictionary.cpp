@@ -24,10 +24,13 @@ std::string normalized(std::string_view word){
     result.resize(limit);return result;
 }
 }
-void Dictionary::open(ReadingSession& session, std::optional<size_t> word, screens::Screen returnScreen) {
+void Dictionary::open(ReadingSession& session, std::optional<size_t> word, screens::Screen returnScreen,
+                      std::function<std::string_view(size_t)> pageWordAt, size_t pageWordCount) {
     returnScreen_ = returnScreen;
+    pageWordAt_ = std::move(pageWordAt);
+    pageWordCount_ = pageWordCount;
     lookupWord_ = word.value_or(session.state.wordIndex);
-    query_=normalized(ReadingLoop::wordAt(session,lookupWord_));
+    query_ = std::string(this->wordAt(session, lookupWord_));
     lookup();
 }
 void Dictionary::lookup(){
